@@ -1,22 +1,16 @@
 import os
 import sqlite3
-import logging
 from datetime import datetime
-from functools import wraps
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ConversationHandler, filters, ContextTypes
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
 # ========== НАСТРОЙКИ ==========
-TOKEN = "8680724321:AAGmcU8I5Z1T9d8kHrqCS5qiZpmLpvPnLY0"  # ← ЗАМЕНИ НА СВОЙ ТОКЕН!
-ADMIN_ID = 355936751  # ← ТВОЙ TELEGRAM ID
+TOKEN = "8680724321:AAGmcU8I5Z1T9d8kHrqCS5qiZpmLpvPnLY0"  # ← ЗАМЕНИ
+ADMIN_ID = 355936751
 
-# Состояния для меню
-ADD_NAME, DELETE_NAME = range(2)
-
-# Путь к базе данных
 DB_PATH = os.path.join(os.path.dirname(__file__), 'bot_database.db')
 
-# ========== ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ ==========
+# ========== БАЗА ДАННЫХ ==========
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
@@ -24,11 +18,8 @@ def init_db():
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             telegram_id INTEGER UNIQUE,
-            username TEXT,
             role TEXT,
-            balance INTEGER DEFAULT 0,
-            registered_at TEXT,
-            custom_rate INTEGER
+            balance INTEGER DEFAULT 0
         )
     ''')
     cur.execute('''
@@ -36,89 +27,31 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             full_name TEXT,
             promoter_id INTEGER,
-            created_at TEXT,
-            confirmed_at TEXT,
-            is_confirmed BOOLEAN DEFAULT 0
+            is_confirmed INTEGER DEFAULT 0
         )
     ''')
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS transactions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            promoter_id INTEGER,
-            amount INTEGER,
-            created_at TEXT,
-            list_item_id INTEGER
-        )
-    ''')
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS monthly_stats (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            promoter_id INTEGER,
-            year_month TEXT,
-            confirmed_count INTEGER DEFAULT 0,
-            total_earned INTEGER DEFAULT 0,
-            UNIQUE(promoter_id, year_month)
-        )
-    ''')
+    cur.execute('INSERT OR IGNORE INTO users (telegram_id, role) VALUES (?, ?)', (ADMIN_ID, 'admin'))
     conn.commit()
     conn.close()
 
-# ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
-def get_current_year_month():
-    return datetime.now().strftime("%Y-%m")
+# ========== ВСПОМОГАТЕЛЬНЫЕ ==========
+def get_rate(count):
+    if count >= 60: return 150
+    if count >= 30: return 130
+    return 120
 
-def get_rate_for_count(confirmed_count):
-    if confirmed_count >= 60:
-        return 150
-    elif confirmed_count >= 30:
-        return 130
-    else:
-        return 120
-
-def update_monthly_stats(promoter_id, confirmed_count_increment=1):
+def get_monthly_count(promoter_id):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    year_month = get_current_year_month()
-    cur.execute('''
-        INSERT INTO monthly_stats (promoter_id, year_month, confirmed_count, total_earned)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(promoter_id, year_month) DO UPDATE SET
-        confirmed_count = confirmed_count + ?
-    ''', (promoter_id, year_month, confirmed_count_increment, 0, confirmed_count_increment))
-    conn.commit()
+    cur.execute("SELECT COUNT(*) FROM lists WHERE promoter_id = ? AND is_confirmed = 1", (promoter_id,))
+    count = cur.fetchone()[0]
     conn.close()
+    return count
 
-def get_promoter_monthly_stats(promoter_id):
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    year_month = get_current_year_month()
-    cur.execute('''
-        SELECT confirmed_count, total_earned 
-        FROM monthly_stats 
-        WHERE promoter_id = ? AND year_month = ?
-    ''', (promoter_id, year_month))
-    result = cur.fetchone()
-    conn.close()
-    if result:
-        return result[0], result[1]
-    return 0, 0
-
-# ========== ДЕКОРАТОР АДМИНА ==========
-def admin_required(func):
-    @wraps(func)
-    async def wrapper(update, update2, *args, **kwargs):
-        user_id = update.effective_user.id
-        if user_id == ADMIN_ID:
-            return await func(update, update2, *args, **kwargs)
-        else:
-            await update.message.reply_text("⛔ Только администратор.")
-            return
-    return wrapper
-
-# ========== КОМАНДЫ ==========
+# ========== ГЛАВНОЕ МЕНЮ ==========
 async def start(update, context):
     user_id = update.effective_user.id
-    username = update.effective_user.username
+    
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("SELECT role FROM users WHERE telegram_id = ?", (user_id,))
@@ -126,289 +59,314 @@ async def start(update, context):
     conn.close()
     
     if not user:
+        await update.message.reply_text(f"👋 Добро пожаловать!\nВаш ID: {user_id}\nОжидайте назначения роли.")
+        await context.bot.send_message(ADMIN_ID, f"🔔 Новый пользователь: ID {user_id}")
+        return
+    
+    role = user[0]
+    
+    if role == 'admin':
         await update.message.reply_text(
-            f"👋 Добро пожаловать!\nВаш аккаунт не активирован. Обратитесь к администратору.\nВаш ID: {user_id}"
+            "👑 АДМИНИСТРАТОР\n\n"
+            "Команды:\n"
+            "/setrole ID promoter - назначить промоутера\n"
+            "/setrole ID cashier - назначить кассира\n"
+            "/stats - статистика\n"
+            "/reset - сбросить месяц"
         )
-        if user_id != ADMIN_ID:
-            await context.bot.send_message(ADMIN_ID, f"🔔 Новый пользователь: @{username} (ID: {user_id})")
-    else:
-        role = user[0]
-        if role == 'promoter':
-            await show_promoter_menu(update, context)
-        elif role == 'cashier':
-            await show_cashier_menu(update, context)
-        elif role == 'admin':
-            await update.message.reply_text("👑 Вы администратор. Используйте команды:\n/stats - статистика\n/resetmonth - сброс месяца\n/setrole - назначить роль")
+    elif role == 'promoter':
+        keyboard = [
+            [InlineKeyboardButton("📋 Мои списки", callback_data="lists")],
+            [InlineKeyboardButton("➕ Добавить", callback_data="add")],
+            [InlineKeyboardButton("❌ Удалить", callback_data="delete")],
+            [InlineKeyboardButton("💰 Статистика", callback_data="stats")]
+        ]
+        await update.message.reply_text("🔧 МЕНЮ ПРОМОУТЕРА", reply_markup=InlineKeyboardMarkup(keyboard))
+    elif role == 'cashier':
+        await update.message.reply_text("🔍 КАССИР\n\nПросто отправьте Фамилию Имя человека.")
 
-async def show_promoter_menu(update, context):
-    keyboard = [
-        [InlineKeyboardButton("📋 Мои списки", callback_data='my_lists')],
-        [InlineKeyboardButton("➕ Добавить человека", callback_data='add_person')],
-        [InlineKeyboardButton("❌ Удалить человека", callback_data='delete_person')],
-        [InlineKeyboardButton("💰 Моя статистика", callback_data='my_stats')]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    if update.callback_query:
-        await update.callback_query.edit_message_text("🔧 Меню промоутера:", reply_markup=reply_markup)
-    else:
-        await update.message.reply_text("🔧 Меню промоутера:", reply_markup=reply_markup)
-
-async def show_cashier_menu(update, context):
-    await update.message.reply_text(
-        "🔍 Режим кассира\n\nПросто отправьте мне Фамилию Имя человека."
-    )
-
-async def promoter_menu_callback(update, context):
+# ========== МЕНЮ ПРОМОУТЕРА (КНОПКИ) ==========
+async def button_handler(update, context):
     query = update.callback_query
     await query.answer()
-    if query.data == 'my_lists':
-        await show_my_lists(query, context)
-    elif query.data == 'add_person':
-        await query.edit_message_text("✍️ Введите Фамилию Имя:")
-        return ADD_NAME
-    elif query.data == 'delete_person':
-        await query.edit_message_text("🗑 Введите Фамилию Имя для удаления:")
-        return DELETE_NAME
-    elif query.data == 'my_stats':
-        await show_stats(query, context)
-
-async def show_my_lists(query, context):
+    
     user_id = query.from_user.id
+    action = query.data
+    
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("SELECT id FROM users WHERE telegram_id = ?", (user_id,))
     promoter = cur.fetchone()
+    conn.close()
+    
     if not promoter:
-        await query.edit_message_text("Ошибка.")
+        await query.edit_message_text("Ошибка: вы не зарегистрированы")
         return
-    cur.execute("SELECT full_name, is_confirmed FROM lists WHERE promoter_id = ?", (promoter[0],))
-    people = cur.fetchall()
-    conn.close()
-    if not people:
-        await query.edit_message_text("📭 Пусто.")
-        return
-    text = "📋 Ваш список:\n\n"
-    for name, status in people:
-        text += f"{'✅' if status else '⏳'} {name}\n"
-    await query.edit_message_text(text)
-
-async def show_stats(query, context):
-    user_id = query.from_user.id
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("SELECT id, balance FROM users WHERE telegram_id = ?", (user_id,))
-    promoter = cur.fetchone()
-    if not promoter:
-        await query.edit_message_text("Ошибка.")
-        return
-    promoter_id, balance = promoter
-    monthly_confirmed, monthly_earned = get_promoter_monthly_stats(promoter_id)
-    cur.execute("SELECT COUNT(*) FROM lists WHERE promoter_id = ?", (promoter_id,))
-    total_added = cur.fetchone()[0]
-    cur.execute("SELECT COUNT(*) FROM lists WHERE promoter_id = ? AND is_confirmed = 1", (promoter_id,))
-    total_converted = cur.fetchone()[0]
-    conn.close()
-    conv_percent = (total_converted / total_added * 100) if total_added > 0 else 0
-    current_rate = get_rate_for_count(monthly_confirmed)
-    text = (
-        f"💰 Баланс: {balance} руб.\n"
-        f"📊 За этот месяц:\n• Подтверждено: {monthly_confirmed} чел.\n"
-        f"• Ставка: {current_rate} руб./чел.\n"
-        f"📈 Всего: {total_converted}/{total_added} ({conv_percent:.0f}%)"
-    )
-    await query.edit_message_text(text)
-
-async def add_person_start(update, context):
-    return ADD_NAME
-
-async def add_person_get_name(update, context):
-    full_name = update.message.text.strip()
-    user_id = update.effective_user.id
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("SELECT id FROM users WHERE telegram_id = ?", (user_id,))
-    promoter = cur.fetchone()
-    if not promoter:
-        await update.message.reply_text("Ошибка.")
-        return ConversationHandler.END
-    cur.execute("INSERT INTO lists (full_name, promoter_id, created_at, is_confirmed) VALUES (?, ?, ?, ?)",
-                (full_name, promoter[0], datetime.now().isoformat(), 0))
-    conn.commit()
-    conn.close()
-    await update.message.reply_text(f"✅ {full_name} добавлен!")
-    return ConversationHandler.END
-
-async def delete_person_start(update, context):
-    return DELETE_NAME
-
-async def delete_person_get_name(update, context):
-    full_name = update.message.text.strip()
-    user_id = update.effective_user.id
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("SELECT id FROM users WHERE telegram_id = ?", (user_id,))
-    promoter = cur.fetchone()
-    if not promoter:
-        await update.message.reply_text("Ошибка.")
-        return ConversationHandler.END
-    cur.execute("DELETE FROM lists WHERE full_name = ? AND promoter_id = ? AND is_confirmed = 0", 
-                (full_name, promoter[0]))
-    conn.commit()
-    conn.close()
-    await update.message.reply_text(f"🗑 {full_name} удален" if cur.rowcount > 0 else f"❌ {full_name} не найден")
-    return ConversationHandler.END
-
-async def check_person(update, context):
-    full_name = update.message.text.strip()
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute('''
-        SELECT l.id, l.full_name, u.telegram_id, u.id 
-        FROM lists l
-        JOIN users u ON l.promoter_id = u.id
-        WHERE l.full_name = ? AND l.is_confirmed = 0
-    ''', (full_name,))
-    result = cur.fetchone()
-    conn.close()
-    if not result:
-        await update.message.reply_text("❌ Человека нет в списках.")
-        return
-    list_id, name, promoter_tg_id, promoter_db_id = result
-    keyboard = [[InlineKeyboardButton("✅ Подтвердить", callback_data=f"confirm_{list_id}_{promoter_db_id}"),
-                 InlineKeyboardButton("❌ Отмена", callback_data="cancel")]]
-    await update.message.reply_text(f"🔔 Найден: {name}\nПодтвердить?", reply_markup=InlineKeyboardMarkup(keyboard))
-
-async def confirm_callback(update, context):
-    query = update.callback_query
-    await query.answer()
-    if query.data == "cancel":
-        await query.edit_message_text("❌ Отменено.")
-        return
-    _, list_id_str, promoter_db_id_str = query.data.split('_')
-    list_id, promoter_db_id = int(list_id_str), int(promoter_db_id_str)
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("SELECT is_confirmed FROM lists WHERE id = ?", (list_id,))
-    if cur.fetchone()[0]:
-        await query.edit_message_text("⚠️ Уже отмечен.")
+    
+    promoter_id = promoter[0]
+    
+    if action == "lists":
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute("SELECT full_name, is_confirmed FROM lists WHERE promoter_id = ?", (promoter_id,))
+        people = cur.fetchall()
         conn.close()
-        return
-    monthly_confirmed, _ = get_promoter_monthly_stats(promoter_db_id)
-    rate = get_rate_for_count(monthly_confirmed)
-    cur.execute("UPDATE lists SET is_confirmed = 1, confirmed_at = ? WHERE id = ?", 
-                (datetime.now().isoformat(), list_id))
-    cur.execute("UPDATE users SET balance = balance + ? WHERE id = ?", (rate, promoter_db_id))
-    cur.execute("INSERT INTO transactions (promoter_id, amount, created_at, list_item_id) VALUES (?, ?, ?, ?)",
-                (promoter_db_id, rate, datetime.now().isoformat(), list_id))
-    update_monthly_stats(promoter_db_id, 1)
-    cur.execute('''UPDATE monthly_stats SET total_earned = total_earned + ? 
-                   WHERE promoter_id = ? AND year_month = ?''', 
-                (rate, promoter_db_id, get_current_year_month()))
-    conn.commit()
-    cur.execute("SELECT balance FROM users WHERE id = ?", (promoter_db_id,))
-    new_balance = cur.fetchone()[0]
-    conn.close()
-    await query.edit_message_text(f"✅ Подтверждено! +{rate} руб.\nБаланс промоутера: {new_balance} руб.")
-    cur = conn.cursor()
-    cur.execute("SELECT telegram_id FROM users WHERE id = ?", (promoter_db_id,))
-    promoter_tg_id = cur.fetchone()
-    conn.close()
-    if promoter_tg_id:
-        await context.bot.send_message(promoter_tg_id[0], f"🎉 Пришел {name}! +{rate} руб. Баланс: {new_balance} руб.")
+        
+        if not people:
+            await query.edit_message_text("📭 Список пуст")
+            return
+        
+        text = "📋 ВАШ СПИСОК:\n\n"
+        for name, status in people:
+            icon = "✅" if status else "⏳"
+            text += f"{icon} {name}\n"
+        await query.edit_message_text(text)
+    
+    elif action == "add":
+        context.user_data['action'] = 'add'
+        await query.edit_message_text("✍️ Введите Фамилию Имя:")
+    
+    elif action == "delete":
+        context.user_data['action'] = 'delete'
+        await query.edit_message_text("🗑 Введите Фамилию Имя для удаления:")
+    
+    elif action == "stats":
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute("SELECT balance FROM users WHERE id = ?", (promoter_id,))
+        balance = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM lists WHERE promoter_id = ?", (promoter_id,))
+        total_added = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM lists WHERE promoter_id = ? AND is_confirmed = 1", (promoter_id,))
+        total_confirmed = cur.fetchone()[0]
+        conn.close()
+        
+        monthly = get_monthly_count(promoter_id)
+        rate = get_rate(monthly)
+        
+        text = (
+            f"💰 БАЛАНС: {balance} руб.\n"
+            f"📊 ЗА МЕСЯЦ: {monthly} чел. (ставка {rate} руб.)\n"
+            f"📈 ВСЕГО: {total_confirmed}/{total_added} чел."
+        )
+        await query.edit_message_text(text)
 
-@admin_required
+# ========== ОБРАБОТКА ТЕКСТА ==========
+async def handle_text(update, context):
+    user_id = update.effective_user.id
+    text = update.message.text.strip()
+    
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("SELECT role FROM users WHERE telegram_id = ?", (user_id,))
+    user = cur.fetchone()
+    conn.close()
+    
+    if not user:
+        await update.message.reply_text("❌ Вы не зарегистрированы")
+        return
+    
+    role = user[0]
+    
+    # ПРОМОУТЕР - добавление/удаление
+    if role == 'promoter' and 'action' in context.user_data:
+        action = context.user_data['action']
+        del context.user_data['action']
+        
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute("SELECT id FROM users WHERE telegram_id = ?", (user_id,))
+        promoter_id = cur.fetchone()[0]
+        
+        if action == 'add':
+            cur.execute("INSERT INTO lists (full_name, promoter_id, is_confirmed) VALUES (?, ?, 0)", (text, promoter_id))
+            conn.commit()
+            await update.message.reply_text(f"✅ {text} ДОБАВЛЕН")
+        
+        elif action == 'delete':
+            cur.execute("DELETE FROM lists WHERE full_name = ? AND promoter_id = ? AND is_confirmed = 0", (text, promoter_id))
+            conn.commit()
+            if cur.rowcount > 0:
+                await update.message.reply_text(f"🗑 {text} УДАЛЕН")
+            else:
+                await update.message.reply_text(f"❌ {text} НЕ НАЙДЕН")
+        conn.close()
+        
+        # Показываем меню после действия
+        keyboard = [
+            [InlineKeyboardButton("📋 Мои списки", callback_data="lists")],
+            [InlineKeyboardButton("➕ Добавить", callback_data="add")],
+            [InlineKeyboardButton("❌ Удалить", callback_data="delete")],
+            [InlineKeyboardButton("💰 Статистика", callback_data="stats")]
+        ]
+        await update.message.reply_text("🔧 МЕНЮ ПРОМОУТЕРА", reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+    
+    # КАССИР - проверка человека
+    if role == 'cashier':
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute('''
+            SELECT l.id, l.full_name, u.id 
+            FROM lists l
+            JOIN users u ON l.promoter_id = u.id
+            WHERE l.full_name = ? AND l.is_confirmed = 0
+        ''', (text,))
+        result = cur.fetchone()
+        conn.close()
+        
+        if not result:
+            await update.message.reply_text("❌ ЧЕЛОВЕКА НЕТ В СПИСКАХ")
+            return
+        
+        list_id, name, promoter_id = result
+        
+        keyboard = [[
+            InlineKeyboardButton("✅ ПОДТВЕРДИТЬ", callback_data=f"ok_{list_id}_{promoter_id}"),
+            InlineKeyboardButton("❌ ОТМЕНА", callback_data="no")
+        ]]
+        await update.message.reply_text(f"🔔 НАЙДЕН: {name}", reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+    
+    await update.message.reply_text("❌ НЕИЗВЕСТНАЯ КОМАНДА")
+
+# ========== ПОДТВЕРЖДЕНИЕ КАССИРА ==========
+async def confirm_handler(update, context):
+    query = update.callback_query
+    await query.answer()
+    
+    if query.data == "no":
+        await query.edit_message_text("❌ ОТМЕНЕНО")
+        return
+    
+    if query.data.startswith("ok_"):
+        _, list_id, promoter_id = query.data.split("_")
+        list_id = int(list_id)
+        promoter_id = int(promoter_id)
+        
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        
+        # Проверяем, не подтвержден ли уже
+        cur.execute("SELECT is_confirmed FROM lists WHERE id = ?", (list_id,))
+        if cur.fetchone()[0] == 1:
+            await query.edit_message_text("⚠️ УЖЕ ПОДТВЕРЖДЕН")
+            conn.close()
+            return
+        
+        # Считаем сколько уже подтверждено за месяц
+        monthly = get_monthly_count(promoter_id)
+        rate = get_rate(monthly)
+        
+        # Отмечаем как подтвержденного
+        cur.execute("UPDATE lists SET is_confirmed = 1 WHERE id = ?", (list_id,))
+        
+        # Начисляем деньги
+        cur.execute("UPDATE users SET balance = balance + ? WHERE id = ?", (rate, promoter_id))
+        
+        # Получаем новый баланс
+        cur.execute("SELECT balance FROM users WHERE id = ?", (promoter_id,))
+        new_balance = cur.fetchone()[0]
+        
+        conn.commit()
+        
+        # Получаем Telegram ID промоутера
+        cur.execute("SELECT telegram_id FROM users WHERE id = ?", (promoter_id,))
+        promoter_tg = cur.fetchone()
+        conn.close()
+        
+        await query.edit_message_text(f"✅ ПОДТВЕРЖДЕНО!\n💰 +{rate} руб.\n💰 БАЛАНС: {new_balance} руб.")
+        
+        # Уведомляем промоутера
+        if promoter_tg:
+            await context.bot.send_message(promoter_tg[0], f"🎉 ПРИШЕЛ ГОСТЬ!\n💰 +{rate} руб.\n💰 БАЛАНС: {new_balance} руб.")
+
+# ========== АДМИН КОМАНДЫ ==========
 async def set_role(update, context):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("⛔ Только администратор")
+        return
+    
     try:
         args = context.args
         if len(args) != 2:
-            await update.message.reply_text("Использование: /setrole <telegram_id> <promoter|cashier|admin>")
+            await update.message.reply_text("Использование: /setrole ID promoter|cashier")
             return
-        tg_id, role = int(args[0]), args[1]
-        if role not in ['promoter', 'cashier', 'admin']:
-            await update.message.reply_text("Роль: promoter, cashier или admin")
+        
+        tg_id = int(args[0])
+        role = args[1]
+        
+        if role not in ['promoter', 'cashier']:
+            await update.message.reply_text("Роль: promoter или cashier")
             return
+        
         conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
-        cur.execute('''INSERT INTO users (telegram_id, role, registered_at) VALUES (?, ?, ?)
-                       ON CONFLICT(telegram_id) DO UPDATE SET role = ?''', 
-                    (tg_id, role, datetime.now().isoformat(), role))
+        cur.execute("INSERT OR REPLACE INTO users (telegram_id, role, balance) VALUES (?, ?, 0)", (tg_id, role))
         conn.commit()
         conn.close()
-        await update.message.reply_text(f"✅ Роль {role} назначена пользователю {tg_id}")
+        
+        await update.message.reply_text(f"✅ Роль {role} назначена {tg_id}")
+        await context.bot.send_message(tg_id, f"✅ Вам назначена роль {role}")
+        
     except Exception as e:
         await update.message.reply_text(f"Ошибка: {e}")
 
-@admin_required
-async def show_stats_all(update, context):
+async def stats_all(update, context):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("⛔ Только администратор")
+        return
+    
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    cur.execute('''
-        SELECT u.telegram_id, u.username, u.balance, COALESCE(ms.confirmed_count, 0), COALESCE(ms.total_earned, 0)
-        FROM users u
-        LEFT JOIN monthly_stats ms ON u.id = ms.promoter_id AND ms.year_month = ?
-        WHERE u.role = 'promoter'
-        ORDER BY COALESCE(ms.confirmed_count, 0) DESC
-    ''', (get_current_year_month(),))
+    cur.execute("SELECT telegram_id, role, balance FROM users WHERE role = 'promoter'")
     promoters = cur.fetchall()
     conn.close()
+    
     if not promoters:
-        await update.message.reply_text("Нет промоутеров.")
+        await update.message.reply_text("Нет промоутеров")
         return
-    text = f"📊 Статистика за {get_current_year_month()}:\n\n"
-    for tg_id, username, balance, confirmed, earned in promoters:
-        text += f"@{username or tg_id}: {confirmed} чел., {earned} руб. (баланс: {balance} руб.)\n"
+    
+    text = "📊 СТАТИСТИКА:\n\n"
+    for tg_id, role, balance in promoters:
+        monthly = get_monthly_count(tg_id)
+        text += f"ID {tg_id}: {monthly} чел., {balance} руб.\n"
+    
     await update.message.reply_text(text)
 
-@admin_required
 async def reset_month(update, context):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("⛔ Только администратор")
+        return
+    
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    cur.execute('''
-        SELECT u.id, u.telegram_id, u.username, ms.confirmed_count, ms.total_earned
-        FROM users u
-        LEFT JOIN monthly_stats ms ON u.id = ms.promoter_id AND ms.year_month = ?
-        WHERE u.role = 'promoter'
-    ''', (get_current_year_month(),))
-    promoters = cur.fetchall()
-    for p in promoters:
-        if p[3]:
-            try:
-                await context.bot.send_message(p[1], f"📅 Итоги месяца: {p[3]} чел., {p[4]} руб. Начинаем новый месяц!")
-            except:
-                pass
-    cur.execute("DELETE FROM monthly_stats WHERE year_month = ?", (get_current_year_month(),))
+    
+    # Обнуляем статистику (просто удаляем подтвержденных)
+    cur.execute("UPDATE lists SET is_confirmed = 0")
     conn.commit()
     conn.close()
-    await update.message.reply_text("✅ Месячная статистика обнулена.")
+    
+    await update.message.reply_text("✅ Месяц сброшен. Статистика обнулена.")
 
 # ========== ЗАПУСК ==========
 def main():
     init_db()
     
-    # Добавляем админа в базу данных при запуске
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute('''INSERT OR IGNORE INTO users (telegram_id, role, registered_at) VALUES (?, ?, ?)''',
-                (ADMIN_ID, 'admin', datetime.now().isoformat()))
-    conn.commit()
-    conn.close()
-    
     app = Application.builder().token(TOKEN).build()
+    
+    # Команды
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("setrole", set_role))
-    app.add_handler(CommandHandler("stats", show_stats_all))
-    app.add_handler(CommandHandler("resetmonth", reset_month))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, check_person))
-    conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(promoter_menu_callback, pattern='^(add_person|delete_person)$')],
-        states={ADD_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_person_get_name)],
-                DELETE_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, delete_person_get_name)]},
-        fallbacks=[]
-    )
-    app.add_handler(conv)
-    app.add_handler(CallbackQueryHandler(promoter_menu_callback, pattern='^(my_lists|my_stats)$'))
-    app.add_handler(CallbackQueryHandler(confirm_callback, pattern='^(confirm_|cancel)'))
-    print("🤖 Бот запущен!")
+    app.add_handler(CommandHandler("stats", stats_all))
+    app.add_handler(CommandHandler("reset", reset_month))
+    
+    # Обработчики
+    app.add_handler(CallbackQueryHandler(button_handler, pattern="^(lists|add|delete|stats)$"))
+    app.add_handler(CallbackQueryHandler(confirm_handler, pattern="^(ok_|no)"))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    
+    print("✅ БОТ ЗАПУЩЕН!")
     app.run_polling()
 
 if __name__ == '__main__':
