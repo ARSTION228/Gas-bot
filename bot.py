@@ -5,7 +5,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
 # ========== НАСТРОЙКИ ==========
-TOKEN = "СЮДА_ТВОЙ_ТОКЕН"  # ← ЗАМЕНИ
+TOKEN = "8680724321:AAGmcU8I5Z1T9d8kHrqCS5qiZpmLpvPnLY0"  # ← ЗАМЕНИ
 ADMIN_ID = 355936751
 
 DB_PATH = os.path.join(os.path.dirname(__file__), 'bot_database.db')
