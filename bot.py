@@ -7,7 +7,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ConversationHandler, filters, ContextTypes
 
 # ========== НАСТРОЙКИ ==========
-TOKEN = "8773863162:AAFXalpU7-zEIwosu_JxH5-5wAmpoyC0r7I"  # ← ЗАМЕНИ НА СВОЙ ТОКЕН!
+TOKEN = "8680724321:AAGmcU8I5Z1T9d8kHrqCS5qiZpmLpvPnLY0"  # ← ЗАМЕНИ НА СВОЙ ТОКЕН!
 ADMIN_USERNAME = "ARSTION"
 
 # Состояния для меню
