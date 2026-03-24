@@ -1,13 +1,11 @@
 import os
 import sqlite3
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+from telegram.ext import Updater, CommandHandler, MessageHandler, CallbackQueryHandler, Filters, CallbackContext
 
-# ========== НАСТРОЙКИ ==========
-TOKEN = "8680724321:AAGmcU8I5Z1T9d8kHrqCS5qiZpmLpvPnLY0"  # ЗАМЕНИ НА СВОЙ
-ADMIN_ID = 355936751  # ЗАМЕНИ НА СВОЙ
+TOKEN = "8680724321:AAGmcU8I5Z1T9d8kHrqCS5qiZpmLpvPnLY0"
+ADMIN_ID = 355936751
 
-# ========== БАЗА ДАННЫХ ==========
 def init_db():
     conn = sqlite3.connect('bot.db')
     c = conn.cursor()
@@ -97,40 +95,34 @@ def get_promoter_by_tg(tg):
     conn.close()
     return r[0] if r else None
 
-# ========== ГЛАВНОЕ МЕНЮ ==========
-async def start(update, context):
+def start(update, context):
     tg = update.effective_user.id
     role = get_role(tg)
     if not role:
-        await update.message.reply_text(f"👋 Ваш ID: {tg}\nОжидайте назначения роли")
-        await context.bot.send_message(ADMIN_ID, f"Новый пользователь: {tg}")
+        update.message.reply_text(f"👋 Ваш ID: {tg}\nОжидайте назначения роли")
+        context.bot.send_message(ADMIN_ID, f"Новый пользователь: {tg}")
         return
     if role == 'admin':
-        kb = [
-            [InlineKeyboardButton("📊 Статистика", callback_data="stats")],
-            [InlineKeyboardButton("👥 Промоутеры", callback_data="promoters")],
-            [InlineKeyboardButton("💳 Кассиры", callback_data="cashiers")],
-            [InlineKeyboardButton("📅 Мероприятия", callback_data="events")],
-            [InlineKeyboardButton("🔄 Сброс месяца", callback_data="reset")]
-        ]
-        await update.message.reply_text("👑 АДМИН", reply_markup=InlineKeyboardMarkup(kb))
+        kb = [[InlineKeyboardButton("📊 Статистика", callback_data="stats")],
+              [InlineKeyboardButton("👥 Промоутеры", callback_data="promoters")],
+              [InlineKeyboardButton("💳 Кассиры", callback_data="cashiers")],
+              [InlineKeyboardButton("📅 Мероприятия", callback_data="events")],
+              [InlineKeyboardButton("🔄 Сброс месяца", callback_data="reset")]]
+        update.message.reply_text("👑 АДМИН", reply_markup=InlineKeyboardMarkup(kb))
     elif role == 'promoter':
-        kb = [
-            [InlineKeyboardButton("📋 Мои списки", callback_data="mylists")],
-            [InlineKeyboardButton("➕ Добавить", callback_data="add")],
-            [InlineKeyboardButton("❌ Удалить", callback_data="del")],
-            [InlineKeyboardButton("💰 Статистика", callback_data="stats_p")]
-        ]
-        await update.message.reply_text("🔧 ПРОМОУТЕР", reply_markup=InlineKeyboardMarkup(kb))
+        kb = [[InlineKeyboardButton("📋 Мои списки", callback_data="mylists")],
+              [InlineKeyboardButton("➕ Добавить", callback_data="add")],
+              [InlineKeyboardButton("❌ Удалить", callback_data="del")],
+              [InlineKeyboardButton("💰 Статистика", callback_data="stats_p")]]
+        update.message.reply_text("🔧 ПРОМОУТЕР", reply_markup=InlineKeyboardMarkup(kb))
     elif role == 'cashier':
-        await update.message.reply_text("🔍 КАССИР\n\nОтправьте Фамилию Имя")
+        update.message.reply_text("🔍 КАССИР\n\nОтправьте Фамилию Имя")
 
-# ========== АДМИН ==========
-async def admin_stats(update, context):
+def admin_stats(update, context):
     q = update.callback_query
     prs = get_promoters()
     if not prs:
-        await q.edit_message_text("Нет промоутеров")
+        q.edit_message_text("Нет промоутеров")
         return
     txt = "📊 СТАТИСТИКА\n\n"
     for pid, tg, name, bal in prs:
@@ -138,22 +130,22 @@ async def admin_stats(update, context):
         cnt = len(get_people(pid))
         txt += f"{nm}\n💰 {bal} руб. | 👥 {cnt} чел.\n\n"
     kb = [[InlineKeyboardButton("🔙 Назад", callback_data="back")]]
-    await q.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb))
+    q.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb))
 
-async def admin_promoters(update, context):
+def admin_promoters(update, context):
     q = update.callback_query
     prs = get_promoters()
     if not prs:
-        await q.edit_message_text("Нет промоутеров")
+        q.edit_message_text("Нет промоутеров")
         return
     kb = []
     for pid, tg, name, bal in prs:
         nm = f"@{name}" if name else str(tg)
         kb.append([InlineKeyboardButton(f"{nm} ({bal} руб.)", callback_data=f"view_{pid}")])
     kb.append([InlineKeyboardButton("🔙 Назад", callback_data="back")])
-    await q.edit_message_text("👥 ПРОМОУТЕРЫ", reply_markup=InlineKeyboardMarkup(kb))
+    q.edit_message_text("👥 ПРОМОУТЕРЫ", reply_markup=InlineKeyboardMarkup(kb))
 
-async def view_promoter(update, context, pid):
+def view_promoter(update, context, pid):
     q = update.callback_query
     conn = sqlite3.connect('bot.db')
     c = conn.cursor()
@@ -168,13 +160,11 @@ async def view_promoter(update, context, pid):
         txt += "📋 СПИСОК:\n" + "\n".join([f"• {p[0]}" for p in people])
     else:
         txt += "Список пуст"
-    kb = [
-        [InlineKeyboardButton("🗑 Удалить", callback_data=f"del_p_{pid}")],
-        [InlineKeyboardButton("🔙 Назад", callback_data="promoters")]
-    ]
-    await q.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb))
+    kb = [[InlineKeyboardButton("🗑 Удалить", callback_data=f"del_p_{pid}")],
+          [InlineKeyboardButton("🔙 Назад", callback_data="promoters")]]
+    q.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb))
 
-async def delete_promoter(update, context, pid):
+def delete_promoter(update, context, pid):
     q = update.callback_query
     conn = sqlite3.connect('bot.db')
     c = conn.cursor()
@@ -184,23 +174,23 @@ async def delete_promoter(update, context, pid):
     c.execute("DELETE FROM people WHERE promoter_id = ?", (pid,))
     conn.commit()
     conn.close()
-    await q.edit_message_text("✅ Промоутер удален")
-    await context.bot.send_message(tg, "❌ Ваша роль промоутера удалена")
+    q.edit_message_text("✅ Промоутер удален")
+    context.bot.send_message(tg, "❌ Ваша роль промоутера удалена")
 
-async def admin_cashiers(update, context):
+def admin_cashiers(update, context):
     q = update.callback_query
     cs = get_cashiers()
     if not cs:
-        await q.edit_message_text("Нет кассиров")
+        q.edit_message_text("Нет кассиров")
         return
     kb = []
     for cid, tg, name in cs:
         nm = f"@{name}" if name else str(tg)
         kb.append([InlineKeyboardButton(nm, callback_data=f"del_c_{cid}")])
     kb.append([InlineKeyboardButton("🔙 Назад", callback_data="back")])
-    await q.edit_message_text("💳 КАССИРЫ\n\nНажмите для удаления", reply_markup=InlineKeyboardMarkup(kb))
+    q.edit_message_text("💳 КАССИРЫ\n\nНажмите для удаления", reply_markup=InlineKeyboardMarkup(kb))
 
-async def delete_cashier(update, context, cid):
+def delete_cashier(update, context, cid):
     q = update.callback_query
     conn = sqlite3.connect('bot.db')
     c = conn.cursor()
@@ -209,48 +199,46 @@ async def delete_cashier(update, context, cid):
     c.execute("DELETE FROM users WHERE id = ?", (cid,))
     conn.commit()
     conn.close()
-    await q.edit_message_text("✅ Кассир удален")
-    await context.bot.send_message(tg, "❌ Ваша роль кассира удалена")
+    q.edit_message_text("✅ Кассир удален")
+    context.bot.send_message(tg, "❌ Ваша роль кассира удалена")
 
-async def admin_events(update, context):
+def admin_events(update, context):
     q = update.callback_query
     evs = get_events()
     txt = "📅 МЕРОПРИЯТИЯ\n\n" + "\n".join([f"• {e[1]}" for e in evs]) if evs else "Нет мероприятий"
-    kb = [
-        [InlineKeyboardButton("➕ Добавить", callback_data="add_event")],
-        [InlineKeyboardButton("❌ Удалить", callback_data="del_event")],
-        [InlineKeyboardButton("🔙 Назад", callback_data="back")]
-    ]
-    await q.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb))
+    kb = [[InlineKeyboardButton("➕ Добавить", callback_data="add_event")],
+          [InlineKeyboardButton("❌ Удалить", callback_data="del_event")],
+          [InlineKeyboardButton("🔙 Назад", callback_data="back")]]
+    q.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb))
 
-async def add_event_start(update, context):
-    await update.callback_query.edit_message_text("✍️ Введите название мероприятия:")
+def add_event_start(update, context):
+    update.callback_query.edit_message_text("✍️ Введите название мероприятия:")
     context.user_data['step'] = 'event'
 
-async def add_event(update, context):
+def add_event(update, context):
     name = update.message.text.strip()
     conn = sqlite3.connect('bot.db')
     c = conn.cursor()
     c.execute("INSERT INTO events (name) VALUES (?)", (name,))
     conn.commit()
     conn.close()
-    await update.message.reply_text(f"✅ Мероприятие '{name}' добавлено")
+    update.message.reply_text(f"✅ Мероприятие '{name}' добавлено")
     context.user_data['step'] = None
-    await start(update, context)
+    start(update, context)
 
-async def delete_event_list(update, context):
+def delete_event_list(update, context):
     q = update.callback_query
     evs = get_events()
     if not evs:
-        await q.edit_message_text("Нет мероприятий")
+        q.edit_message_text("Нет мероприятий")
         return
     kb = []
     for eid, name in evs:
         kb.append([InlineKeyboardButton(name, callback_data=f"del_e_{eid}")])
     kb.append([InlineKeyboardButton("🔙 Назад", callback_data="events")])
-    await q.edit_message_text("❌ Выберите мероприятие:", reply_markup=InlineKeyboardMarkup(kb))
+    q.edit_message_text("❌ Выберите мероприятие:", reply_markup=InlineKeyboardMarkup(kb))
 
-async def delete_event(update, context, eid):
+def delete_event(update, context, eid):
     q = update.callback_query
     conn = sqlite3.connect('bot.db')
     c = conn.cursor()
@@ -258,9 +246,9 @@ async def delete_event(update, context, eid):
     c.execute("DELETE FROM people WHERE event_id = ?", (eid,))
     conn.commit()
     conn.close()
-    await q.edit_message_text("✅ Мероприятие удалено")
+    q.edit_message_text("✅ Мероприятие удалено")
 
-async def admin_reset(update, context):
+def admin_reset(update, context):
     q = update.callback_query
     conn = sqlite3.connect('bot.db')
     c = conn.cursor()
@@ -272,105 +260,103 @@ async def admin_reset(update, context):
     conn.close()
     for p in promoters:
         try:
-            await context.bot.send_message(p[0], "📅 НОВЫЙ МЕСЯЦ!\n\nВсе списки и баланс обнулены")
+            context.bot.send_message(p[0], "📅 НОВЫЙ МЕСЯЦ!\n\nВсе списки и баланс обнулены")
         except:
             pass
-    await q.edit_message_text("✅ Месяц сброшен")
+    q.edit_message_text("✅ Месяц сброшен")
 
-# ========== ПРОМОУТЕР ==========
-async def promo_lists(update, context):
+def promo_lists(update, context):
     q = update.callback_query
     tg = q.from_user.id
     pid = get_promoter_by_tg(tg)
     if not pid:
-        await q.edit_message_text("Ошибка")
+        q.edit_message_text("Ошибка")
         return
     people = get_people(pid)
     if not people:
-        await q.edit_message_text("📭 Список пуст")
+        q.edit_message_text("📭 Список пуст")
         return
     txt = "📋 ВАШ СПИСОК\n\n" + "\n".join([f"• {p}" for p in people])
     kb = [[InlineKeyboardButton("🔙 Назад", callback_data="back")]]
-    await q.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb))
+    q.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb))
 
-async def promo_stats(update, context):
+def promo_stats(update, context):
     q = update.callback_query
     tg = q.from_user.id
     pid = get_promoter_by_tg(tg)
     if not pid:
-        await q.edit_message_text("Ошибка")
+        q.edit_message_text("Ошибка")
         return
     bal = get_balance(pid)
     cnt = len(get_people(pid))
     txt = f"💰 БАЛАНС: {bal} руб.\n\n📊 ДОБАВЛЕНО: {cnt} чел."
     kb = [[InlineKeyboardButton("🔙 Назад", callback_data="back")]]
-    await q.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb))
+    q.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb))
 
-async def promo_add(update, context):
+def promo_add(update, context):
     q = update.callback_query
     evs = get_events()
     if not evs:
-        await q.edit_message_text("Нет мероприятий")
+        q.edit_message_text("Нет мероприятий")
         return
     kb = []
     for eid, name in evs:
         kb.append([InlineKeyboardButton(name, callback_data=f"add_p_{eid}")])
     kb.append([InlineKeyboardButton("🔙 Назад", callback_data="back")])
-    await q.edit_message_text("📅 Выберите мероприятие:", reply_markup=InlineKeyboardMarkup(kb))
+    q.edit_message_text("📅 Выберите мероприятие:", reply_markup=InlineKeyboardMarkup(kb))
 
-async def add_person_start(update, context, eid):
+def add_person_start(update, context, eid):
     context.user_data['eid'] = eid
-    await update.callback_query.edit_message_text("✍️ Введите Фамилию Имя:")
+    update.callback_query.edit_message_text("✍️ Введите Фамилию Имя:")
     context.user_data['step'] = 'add'
 
-async def add_person(update, context):
+def add_person(update, context):
     name = update.message.text.strip()
     tg = update.effective_user.id
     pid = get_promoter_by_tg(tg)
     eid = context.user_data.get('eid')
     if not pid:
-        await update.message.reply_text("Ошибка")
+        update.message.reply_text("Ошибка")
         return
     add_person(pid, name, eid)
-    await update.message.reply_text(f"✅ {name} добавлен")
+    update.message.reply_text(f"✅ {name} добавлен")
     context.user_data['step'] = None
-    await start(update, context)
+    start(update, context)
 
-async def promo_del(update, context):
+def promo_del(update, context):
     q = update.callback_query
     evs = get_events()
     if not evs:
-        await q.edit_message_text("Нет мероприятий")
+        q.edit_message_text("Нет мероприятий")
         return
     kb = []
     for eid, name in evs:
         kb.append([InlineKeyboardButton(name, callback_data=f"del_p_{eid}")])
     kb.append([InlineKeyboardButton("🔙 Назад", callback_data="back")])
-    await q.edit_message_text("📅 Выберите мероприятие:", reply_markup=InlineKeyboardMarkup(kb))
+    q.edit_message_text("📅 Выберите мероприятие:", reply_markup=InlineKeyboardMarkup(kb))
 
-async def del_person_start(update, context, eid):
+def del_person_start(update, context, eid):
     context.user_data['eid'] = eid
-    await update.callback_query.edit_message_text("🗑 Введите Фамилию Имя:")
+    update.callback_query.edit_message_text("🗑 Введите Фамилию Имя:")
     context.user_data['step'] = 'del'
 
-async def del_person(update, context):
+def del_person(update, context):
     name = update.message.text.strip()
     tg = update.effective_user.id
     pid = get_promoter_by_tg(tg)
     eid = context.user_data.get('eid')
     if not pid:
-        await update.message.reply_text("Ошибка")
+        update.message.reply_text("Ошибка")
         return
     res = del_person(pid, name, eid)
     if res:
-        await update.message.reply_text(f"🗑 {name} удален")
+        update.message.reply_text(f"🗑 {name} удален")
     else:
-        await update.message.reply_text(f"❌ {name} не найден")
+        update.message.reply_text(f"❌ {name} не найден")
     context.user_data['step'] = None
-    await start(update, context)
+    start(update, context)
 
-# ========== КАССИР ==========
-async def check_person(update, context):
+def check_person(update, context):
     name = update.message.text.strip()
     conn = sqlite3.connect('bot.db')
     c = conn.cursor()
@@ -381,30 +367,31 @@ async def check_person(update, context):
     res = c.fetchone()
     conn.close()
     if not res:
-        await update.message.reply_text("❌ Человека нет в списках")
+        update.message.reply_text("❌ Человека нет в списках")
         return
     pid, pname, promoter_id, promoter_tg, evname = res
     context.user_data['pending'] = (pid, pname, promoter_id, promoter_tg, evname)
-    kb = [[InlineKeyboardButton("✅ ПОДТВЕРДИТЬ", callback_data="ok"), InlineKeyboardButton("❌ ОТМЕНА", callback_data="no")]]
-    await update.message.reply_text(f"🔔 {pname}\n📅 {evname}", reply_markup=InlineKeyboardMarkup(kb))
+    kb = [[InlineKeyboardButton("✅ ПОДТВЕРДИТЬ", callback_data="ok"), 
+           InlineKeyboardButton("❌ ОТМЕНА", callback_data="no")]]
+    update.message.reply_text(f"🔔 {pname}\n📅 {evname}", reply_markup=InlineKeyboardMarkup(kb))
 
-async def confirm(update, context):
+def confirm(update, context):
     q = update.callback_query
-    await q.answer()
+    q.answer()
     if q.data == "no":
-        await q.edit_message_text("❌ Отменено")
+        q.edit_message_text("❌ Отменено")
         return
     if q.data == "ok":
         pending = context.user_data.get('pending')
         if not pending:
-            await q.edit_message_text("Ошибка")
+            q.edit_message_text("Ошибка")
             return
         pid, name, promoter_id, promoter_tg, evname = pending
         conn = sqlite3.connect('bot.db')
         c = conn.cursor()
         c.execute("SELECT id FROM people WHERE id = ?", (pid,))
         if not c.fetchone():
-            await q.edit_message_text("⚠️ Уже отмечен")
+            q.edit_message_text("⚠️ Уже отмечен")
             conn.close()
             return
         c.execute("DELETE FROM people WHERE id = ?", (pid,))
@@ -416,83 +403,83 @@ async def confirm(update, context):
         new_bal = get_balance(promoter_id)
         conn.commit()
         conn.close()
-        await q.edit_message_text(f"✅ ПОДТВЕРЖДЕНО!\n\n👤 {name}\n📅 {evname}")
-        await context.bot.send_message(promoter_tg, f"🎉 ПРИШЕЛ ГОСТЬ!\n\n👤 {name}\n📅 {evname}\n💰 +{rate} руб.\n💰 Баланс: {new_bal} руб.")
+        q.edit_message_text(f"✅ ПОДТВЕРЖДЕНО!\n\n👤 {name}\n📅 {evname}")
+        context.bot.send_message(promoter_tg, f"🎉 ПРИШЕЛ ГОСТЬ!\n\n👤 {name}\n📅 {evname}\n💰 +{rate} руб.\n💰 Баланс: {new_bal} руб.")
         del context.user_data['pending']
 
-# ========== ОБРАБОТЧИКИ ==========
-async def callback_handler(update, context):
+def callback_handler(update, context):
     q = update.callback_query
     d = q.data
     
     if d == "back":
-        await start(update, context)
+        start(update, context)
     elif d == "stats":
-        await admin_stats(update, context)
+        admin_stats(update, context)
     elif d == "promoters":
-        await admin_promoters(update, context)
+        admin_promoters(update, context)
     elif d == "cashiers":
-        await admin_cashiers(update, context)
+        admin_cashiers(update, context)
     elif d == "events":
-        await admin_events(update, context)
+        admin_events(update, context)
     elif d == "reset":
-        await admin_reset(update, context)
+        admin_reset(update, context)
     elif d == "add_event":
-        await add_event_start(update, context)
+        add_event_start(update, context)
     elif d == "del_event":
-        await delete_event_list(update, context)
+        delete_event_list(update, context)
     elif d == "mylists":
-        await promo_lists(update, context)
+        promo_lists(update, context)
     elif d == "add":
-        await promo_add(update, context)
+        promo_add(update, context)
     elif d == "del":
-        await promo_del(update, context)
+        promo_del(update, context)
     elif d == "stats_p":
-        await promo_stats(update, context)
+        promo_stats(update, context)
     elif d.startswith("view_"):
-        await view_promoter(update, context, int(d.split("_")[1]))
+        view_promoter(update, context, int(d.split("_")[1]))
     elif d.startswith("del_p_"):
-        await delete_promoter(update, context, int(d.split("_")[2]))
+        if len(d.split("_")) == 3:
+            delete_promoter(update, context, int(d.split("_")[2]))
+        else:
+            del_person_start(update, context, int(d.split("_")[2]))
     elif d.startswith("del_c_"):
-        await delete_cashier(update, context, int(d.split("_")[2]))
+        delete_cashier(update, context, int(d.split("_")[2]))
     elif d.startswith("del_e_"):
-        await delete_event(update, context, int(d.split("_")[2]))
+        delete_event(update, context, int(d.split("_")[2]))
     elif d.startswith("add_p_"):
-        await add_person_start(update, context, int(d.split("_")[2]))
-    elif d.startswith("del_p_"):
-        await del_person_start(update, context, int(d.split("_")[2]))
+        add_person_start(update, context, int(d.split("_")[2]))
 
-async def message_handler(update, context):
+def message_handler(update, context):
     step = context.user_data.get('step')
     if step == 'event':
-        await add_event(update, context)
+        add_event(update, context)
     elif step == 'add':
-        await add_person(update, context)
+        add_person(update, context)
     elif step == 'del':
-        await del_person(update, context)
+        del_person(update, context)
     else:
         role = get_role(update.effective_user.id)
         if role == 'cashier':
-            await check_person(update, context)
+            check_person(update, context)
         else:
-            await update.message.reply_text("Напишите /start")
+            update.message.reply_text("Напишите /start")
 
-async def set_role(update, context):
+def set_role(update, context):
     if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("⛔ Только администратор")
+        update.message.reply_text("⛔ Только администратор")
         return
     try:
         args = context.args
         if len(args) != 2:
-            await update.message.reply_text("Использование: /setrole ID promoter|cashier")
+            update.message.reply_text("Использование: /setrole ID promoter|cashier")
             return
         tg = int(args[0])
         role = args[1]
         if role not in ['promoter', 'cashier']:
-            await update.message.reply_text("Роль: promoter или cashier")
+            update.message.reply_text("Роль: promoter или cashier")
             return
         try:
-            chat = await context.bot.get_chat(tg)
+            chat = context.bot.get_chat(tg)
             name = chat.username
         except:
             name = None
@@ -501,22 +488,25 @@ async def set_role(update, context):
         c.execute("INSERT OR REPLACE INTO users (tg_id, name, role, balance) VALUES (?, ?, ?, 0)", (tg, name, role))
         conn.commit()
         conn.close()
-        await update.message.reply_text(f"✅ Роль {role} назначена")
-        await context.bot.send_message(tg, f"✅ Вам назначена роль {role}!\nНапишите /start")
+        update.message.reply_text(f"✅ Роль {role} назначена")
+        context.bot.send_message(tg, f"✅ Вам назначена роль {role}!\nНапишите /start")
     except Exception as e:
-        await update.message.reply_text(f"❌ Ошибка: {e}")
+        update.message.reply_text(f"❌ Ошибка: {e}")
 
-# ========== ЗАПУСК ==========
 def main():
     init_db()
-    app = Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("setrole", set_role))
-    app.add_handler(CallbackQueryHandler(confirm, pattern="^(ok|no)$"))
-    app.add_handler(CallbackQueryHandler(callback_handler))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+    updater = Updater(TOKEN, use_context=True)
+    dp = updater.dispatcher
+    
+    dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(CommandHandler("setrole", set_role))
+    dp.add_handler(CallbackQueryHandler(confirm, pattern="^(ok|no)$"))
+    dp.add_handler(CallbackQueryHandler(callback_handler))
+    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, message_handler))
+    
     print("✅ БОТ ЗАПУЩЕН!")
-    app.run_polling()
+    updater.start_polling()
+    updater.idle()
 
 if __name__ == '__main__':
     main()
