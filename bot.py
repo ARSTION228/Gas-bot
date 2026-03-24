@@ -5,22 +5,15 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
 # ========== НАСТРОЙКИ ==========
-TOKEN = "8680724321:AAGmcU8I5Z1T9d8kHrqCS5qiZpmLpvPnLY0"  # ← ЗАМЕНИ
+TOKEN = "8680724321:AAGmcU8I5Z1T9d8kHrqCS5qiZpmLpvPnLY0"  # ← ЗАМЕНИ НА СВОЙ
 ADMIN_ID = 355936751
 
 DB_PATH = os.path.join(os.path.dirname(__file__), 'bot_database.db')
-
-# Состояния
-ADD_NAME, DELETE_NAME = range(2)
-ADMIN_ADD_EVENT, ADMIN_DELETE_EVENT = range(2, 4)
-ADMIN_ADD_PROMOTER, ADMIN_DELETE_PROMOTER = range(4, 6)
-ADMIN_RESET_BALANCE, ADMIN_VIEW_LISTS = range(6, 8)
 
 # ========== БАЗА ДАННЫХ ==========
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    
     cur.execute('''
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -30,7 +23,6 @@ def init_db():
             balance INTEGER DEFAULT 0
         )
     ''')
-    
     cur.execute('''
         CREATE TABLE IF NOT EXISTS events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -39,81 +31,57 @@ def init_db():
             is_active INTEGER DEFAULT 1
         )
     ''')
-    
     cur.execute('''
         CREATE TABLE IF NOT EXISTS lists (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             full_name TEXT,
             promoter_id INTEGER,
             event_id INTEGER,
-            is_confirmed INTEGER DEFAULT 0,
-            confirmed_at TEXT,
-            FOREIGN KEY(event_id) REFERENCES events(id)
+            is_confirmed INTEGER DEFAULT 0
         )
     ''')
-    
     cur.execute('INSERT OR IGNORE INTO users (telegram_id, role) VALUES (?, ?)', (ADMIN_ID, 'admin'))
-    cur.execute('INSERT OR IGNORE INTO events (name, date, is_active) VALUES (?, ?, ?)', 
-                ('Основное мероприятие', datetime.now().strftime("%Y-%m-%d"), 1))
-    
+    cur.execute('INSERT OR IGNORE INTO events (name, date) VALUES (?, ?)', 
+                ('Основное мероприятие', datetime.now().strftime("%Y-%m-%d")))
     conn.commit()
     conn.close()
 
-# ========== ВСПОМОГАТЕЛЬНЫЕ ==========
 def get_rate(count):
     if count >= 60: return 150
     if count >= 30: return 130
     return 120
 
-def get_monthly_count(promoter_id, event_id=None):
+def get_monthly_count(promoter_id):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    if event_id:
-        cur.execute("SELECT COUNT(*) FROM lists WHERE promoter_id = ? AND event_id = ? AND is_confirmed = 1", 
-                    (promoter_id, event_id))
-    else:
-        cur.execute("SELECT COUNT(*) FROM lists WHERE promoter_id = ? AND is_confirmed = 1", (promoter_id,))
+    cur.execute("SELECT COUNT(*) FROM lists WHERE promoter_id = ? AND is_confirmed = 1", (promoter_id,))
     count = cur.fetchone()[0]
     conn.close()
     return count
-
-def get_promoter_balance(promoter_id):
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("SELECT balance FROM users WHERE id = ?", (promoter_id,))
-    balance = cur.fetchone()[0]
-    conn.close()
-    return balance
-
-def get_active_events():
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("SELECT id, name, date FROM events WHERE is_active = 1 ORDER BY date")
-    events = cur.fetchall()
-    conn.close()
-    return events
 
 def get_all_promoters():
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("SELECT id, telegram_id, username, balance FROM users WHERE role = 'promoter'")
-    promoters = cur.fetchall()
+    result = cur.fetchall()
     conn.close()
-    return promoters
+    return result
 
-def get_promoter_lists(promoter_id):
+def get_all_cashiers():
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    cur.execute('''
-        SELECT l.full_name, e.name, l.is_confirmed, l.confirmed_at 
-        FROM lists l
-        JOIN events e ON l.event_id = e.id
-        WHERE l.promoter_id = ?
-        ORDER BY l.is_confirmed, l.id DESC
-    ''', (promoter_id,))
-    lists = cur.fetchall()
+    cur.execute("SELECT id, telegram_id, username FROM users WHERE role = 'cashier'")
+    result = cur.fetchall()
     conn.close()
-    return lists
+    return result
+
+def get_active_events():
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("SELECT id, name FROM events WHERE is_active = 1")
+    result = cur.fetchall()
+    conn.close()
+    return result
 
 # ========== ГЛАВНОЕ МЕНЮ ==========
 async def start(update, context):
@@ -134,273 +102,93 @@ async def start(update, context):
     role = user[0]
     
     if role == 'admin':
-        await show_admin_menu(update, context)
+        keyboard = [
+            [InlineKeyboardButton("📊 Статистика", callback_data="stats")],
+            [InlineKeyboardButton("👥 Промоутеры", callback_data="promoters")],
+            [InlineKeyboardButton("💳 Кассиры", callback_data="cashiers")],
+            [InlineKeyboardButton("📅 Мероприятия", callback_data="events")],
+            [InlineKeyboardButton("🔄 Сброс месяца", callback_data="reset_month")]
+        ]
+        await update.message.reply_text("👑 *АДМИН ПАНЕЛЬ*", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+    
     elif role == 'promoter':
-        await show_promoter_menu(update, context)
+        keyboard = [
+            [InlineKeyboardButton("📋 Списки", callback_data="my_lists")],
+            [InlineKeyboardButton("➕ Добавить", callback_data="add_person")],
+            [InlineKeyboardButton("❌ Удалить", callback_data="delete_person")],
+            [InlineKeyboardButton("💰 Статистика", callback_data="my_stats")]
+        ]
+        await update.message.reply_text("🔧 *МЕНЮ ПРОМОУТЕРА*", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+    
     elif role == 'cashier':
-        await update.message.reply_text("🔍 КАССИР\n\nПросто отправьте Фамилию Имя человека.")
-
-# ========== МЕНЮ АДМИНИСТРАТОРА ==========
-async def show_admin_menu(update, context):
-    keyboard = [
-        [InlineKeyboardButton("📊 Статистика", callback_data="admin_stats")],
-        [InlineKeyboardButton("👥 Список промоутеров", callback_data="admin_promoters")],
-        [InlineKeyboardButton("📋 Списки промоутеров", callback_data="admin_view_lists")],
-        [InlineKeyboardButton("💰 Сбросить баланс", callback_data="admin_reset_balance")],
-        [InlineKeyboardButton("➕ Добавить промоутера", callback_data="admin_add_promoter")],
-        [InlineKeyboardButton("❌ Удалить промоутера", callback_data="admin_delete_promoter")],
-        [InlineKeyboardButton("📅 Мероприятия", callback_data="admin_events")],
-        [InlineKeyboardButton("🔄 Сбросить месяц", callback_data="admin_reset_month")],
-        [InlineKeyboardButton("🔙 Назад", callback_data="back_to_start")]
-    ]
-    
-    if update.callback_query:
-        await update.callback_query.edit_message_text(
-            "👑 *АДМИН-ПАНЕЛЬ*\n\nВыберите действие:",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode='Markdown'
-        )
-    else:
-        await update.message.reply_text(
-            "👑 *АДМИН-ПАНЕЛЬ*\n\nВыберите действие:",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode='Markdown'
-        )
-
-# ========== МЕНЮ ПРОМОУТЕРА ==========
-async def show_promoter_menu(update, context):
-    keyboard = [
-        [InlineKeyboardButton("📋 Мои списки", callback_data="my_lists")],
-        [InlineKeyboardButton("➕ Добавить человека", callback_data="add_person")],
-        [InlineKeyboardButton("❌ Удалить человека", callback_data="delete_person")],
-        [InlineKeyboardButton("💰 Моя статистика", callback_data="my_stats")],
-        [InlineKeyboardButton("🔙 Назад", callback_data="back_to_start")]
-    ]
-    
-    if update.callback_query:
-        await update.callback_query.edit_message_text(
-            "🔧 *МЕНЮ ПРОМОУТЕРА*\n\nВыберите действие:",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode='Markdown'
-        )
-    else:
-        await update.message.reply_text(
-            "🔧 *МЕНЮ ПРОМОУТЕРА*\n\nВыберите действие:",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode='Markdown'
-        )
+        await update.message.reply_text("🔍 *КАССИР*\n\nОтправьте Фамилию Имя человека.", parse_mode='Markdown')
 
 # ========== АДМИН: СТАТИСТИКА ==========
 async def admin_stats(update, context):
     promoters = get_all_promoters()
-    
     if not promoters:
-        await update.callback_query.edit_message_text("📭 Нет зарегистрированных промоутеров")
+        await update.callback_query.edit_message_text("📭 Нет промоутеров")
         return
     
-    events = get_active_events()
-    
-    text = "📊 *СТАТИСТИКА ПРОМОУТЕРОВ*\n\n"
-    
+    text = "📊 *СТАТИСТИКА*\n\n"
     for pid, tg_id, username, balance in promoters:
         name = f"@{username}" if username else str(tg_id)
         monthly = get_monthly_count(pid)
-        rate = get_rate(monthly)
-        
-        # Статистика по мероприятиям
-        event_stats = ""
-        for event in events:
-            event_id, event_name, _ = event
-            event_count = get_monthly_count(pid, event_id)
-            if event_count > 0:
-                event_stats += f"  • {event_name}: {event_count} чел.\n"
-        
-        text += f"👤 *{name}*\n"
-        text += f"💰 Баланс: {balance} руб.\n"
-        text += f"📊 За месяц: {monthly} чел. (ставка {rate} руб.)\n"
-        if event_stats:
-            text += f"📅 По мероприятиям:\n{event_stats}"
-        text += "──────────────────\n"
+        text += f"👤 {name}\n💰 {balance} руб. | 📊 {monthly} чел.\n\n"
     
-    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="admin_menu")]]
-    await update.callback_query.edit_message_text(
-        text,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='Markdown'
-    )
+    await update.callback_query.edit_message_text(text, parse_mode='Markdown')
 
-# ========== АДМИН: СПИСОК ПРОМОУТЕРОВ ==========
+# ========== АДМИН: ПРОМОУТЕРЫ ==========
 async def admin_promoters(update, context):
     promoters = get_all_promoters()
-    
     if not promoters:
         await update.callback_query.edit_message_text("📭 Нет промоутеров")
         return
     
-    text = "👥 *СПИСОК ПРОМОУТЕРОВ*\n\n"
+    keyboard = []
     for pid, tg_id, username, balance in promoters:
         name = f"@{username}" if username else str(tg_id)
-        monthly = get_monthly_count(pid)
-        text += f"• {name}\n"
-        text += f"  ID: {tg_id}\n"
-        text += f"  Баланс: {balance} руб.\n"
-        text += f"  За месяц: {monthly} чел.\n\n"
+        keyboard.append([InlineKeyboardButton(f"{name} (баланс: {balance} руб.)", callback_data=f"view_promoter_{pid}")])
+    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="back")])
     
-    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="admin_menu")]]
-    await update.callback_query.edit_message_text(
-        text,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='Markdown'
-    )
+    await update.callback_query.edit_message_text("👥 *Выберите промоутера:*", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
 
-# ========== АДМИН: ПРОСМОТР СПИСКОВ ПРОМОУТЕРА ==========
-async def admin_view_lists(update, context):
-    promoters = get_all_promoters()
-    
-    if not promoters:
-        await update.callback_query.edit_message_text("📭 Нет промоутеров")
-        return
-    
-    # Создаем кнопки для выбора промоутера
-    keyboard = []
-    for pid, tg_id, username, _ in promoters:
-        name = f"@{username}" if username else str(tg_id)
-        keyboard.append([InlineKeyboardButton(name, callback_data=f"admin_view_promoter_{pid}")])
-    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="admin_menu")])
-    
-    await update.callback_query.edit_message_text(
-        "👥 *Выберите промоутера для просмотра списков:*",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='Markdown'
-    )
-
-async def admin_view_promoter_lists(update, context, promoter_id):
-    lists = get_promoter_lists(promoter_id)
-    
-    if not lists:
-        await update.callback_query.edit_message_text("📭 У этого промоутера нет людей в списках")
-        return
-    
-    # Получаем инфо о промоутере
+async def view_promoter(update, context, promoter_id):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    cur.execute("SELECT telegram_id, username FROM users WHERE id = ?", (promoter_id,))
+    cur.execute("SELECT telegram_id, username, balance FROM users WHERE id = ?", (promoter_id,))
     promoter = cur.fetchone()
+    cur.execute("SELECT full_name, is_confirmed FROM lists WHERE promoter_id = ?", (promoter_id,))
+    people = cur.fetchall()
     conn.close()
     
     name = f"@{promoter[1]}" if promoter[1] else str(promoter[0])
+    balance = promoter[2]
+    monthly = get_monthly_count(promoter_id)
     
-    text = f"📋 *СПИСОК ПРОМОУТЕРА {name}*\n\n"
+    text = f"👤 *{name}*\n💰 Баланс: {balance} руб.\n📊 За месяц: {monthly} чел.\n\n"
     
-    for full_name, event_name, is_confirmed, confirmed_at in lists:
-        status = "✅ ПРИШЕЛ" if is_confirmed else "⏳ ОЖИДАЕТ"
-        if is_confirmed and confirmed_at:
-            date = confirmed_at[:10] if confirmed_at else ""
-            text += f"• {full_name} [{event_name}] - {status} ({date})\n"
-        else:
-            text += f"• {full_name} [{event_name}] - {status}\n"
+    if people:
+        text += "*СПИСОК:*\n"
+        for full_name, status in people:
+            icon = "✅" if status else "⏳"
+            text += f"{icon} {full_name}\n"
+    else:
+        text += "Список пуст"
     
-    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="admin_view_lists")]]
-    await update.callback_query.edit_message_text(
-        text,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='Markdown'
-    )
+    keyboard = [
+        [InlineKeyboardButton("🗑 Удалить промоутера", callback_data=f"del_promoter_{promoter_id}")],
+        [InlineKeyboardButton("🔙 Назад", callback_data="promoters")]
+    ]
+    await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
 
-# ========== АДМИН: СБРОС БАЛАНСА ==========
-async def admin_reset_balance(update, context):
-    promoters = get_all_promoters()
-    
-    if not promoters:
-        await update.callback_query.edit_message_text("📭 Нет промоутеров")
-        return
-    
-    keyboard = []
-    for pid, tg_id, username, _ in promoters:
-        name = f"@{username}" if username else str(tg_id)
-        keyboard.append([InlineKeyboardButton(name, callback_data=f"admin_reset_balance_{pid}")])
-    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="admin_menu")])
-    
-    await update.callback_query.edit_message_text(
-        "💰 *Выберите промоутера для сброса баланса:*",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='Markdown'
-    )
-
-async def admin_reset_balance_confirm(update, context, promoter_id):
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("UPDATE users SET balance = 0 WHERE id = ?", (promoter_id,))
-    cur.execute("SELECT telegram_id, username FROM users WHERE id = ?", (promoter_id,))
-    promoter = cur.fetchone()
-    conn.commit()
-    conn.close()
-    
-    name = f"@{promoter[1]}" if promoter[1] else str(promoter[0])
-    
-    await update.callback_query.edit_message_text(f"✅ Баланс промоутера {name} обнулен")
-    
-    # Уведомляем промоутера
-    await context.bot.send_message(promoter[0], "💰 Ваш баланс был обнулен администратором.")
-
-# ========== АДМИН: ДОБАВЛЕНИЕ ПРОМОУТЕРА ==========
-async def admin_add_promoter(update, context):
-    await update.callback_query.edit_message_text("✍️ Введите Telegram ID промоутера (число):")
-    return ADMIN_ADD_PROMOTER
-
-async def admin_add_promoter_process(update, context):
-    try:
-        tg_id = int(update.message.text.strip())
-        
-        # Получаем username
-        try:
-            chat = await context.bot.get_chat(tg_id)
-            username = chat.username
-        except:
-            username = None
-        
-        conn = sqlite3.connect(DB_PATH)
-        cur = conn.cursor()
-        cur.execute("INSERT OR REPLACE INTO users (telegram_id, username, role, balance) VALUES (?, ?, ?, 0)",
-                    (tg_id, username, 'promoter'))
-        conn.commit()
-        conn.close()
-        
-        await update.message.reply_text(f"✅ Промоутер {tg_id} добавлен")
-        await context.bot.send_message(tg_id, "✅ Вам назначена роль *промоутера*!\nНапишите /start для начала работы.", parse_mode='Markdown')
-        
-    except Exception as e:
-        await update.message.reply_text(f"❌ Ошибка: {e}")
-    
-    await show_admin_menu(update, context)
-    return -1
-
-# ========== АДМИН: УДАЛЕНИЕ ПРОМОУТЕРА ==========
-async def admin_delete_promoter(update, context):
-    promoters = get_all_promoters()
-    
-    if not promoters:
-        await update.callback_query.edit_message_text("📭 Нет промоутеров")
-        return
-    
-    keyboard = []
-    for pid, tg_id, username, _ in promoters:
-        name = f"@{username}" if username else str(tg_id)
-        keyboard.append([InlineKeyboardButton(name, callback_data=f"admin_delete_promoter_{pid}")])
-    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="admin_menu")])
-    
-    await update.callback_query.edit_message_text(
-        "❌ *Выберите промоутера для удаления:*",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='Markdown'
-    )
-
-async def admin_delete_promoter_confirm(update, context, promoter_id):
+async def delete_promoter(update, context, promoter_id):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("SELECT telegram_id, username FROM users WHERE id = ?", (promoter_id,))
     promoter = cur.fetchone()
     cur.execute("DELETE FROM users WHERE id = ?", (promoter_id,))
+    cur.execute("DELETE FROM lists WHERE promoter_id = ?", (promoter_id,))
     conn.commit()
     conn.close()
     
@@ -408,228 +196,216 @@ async def admin_delete_promoter_confirm(update, context, promoter_id):
     await update.callback_query.edit_message_text(f"✅ Промоутер {name} удален")
     
     try:
-        await context.bot.send_message(promoter[0], "❌ Ваша роль промоутера была удалена администратором.")
+        await context.bot.send_message(promoter[0], "❌ Ваша роль промоутера удалена.")
+    except:
+        pass
+
+# ========== АДМИН: КАССИРЫ ==========
+async def admin_cashiers(update, context):
+    cashiers = get_all_cashiers()
+    if not cashiers:
+        await update.callback_query.edit_message_text("📭 Нет кассиров")
+        return
+    
+    keyboard = []
+    for cid, tg_id, username in cashiers:
+        name = f"@{username}" if username else str(tg_id)
+        keyboard.append([InlineKeyboardButton(name, callback_data=f"del_cashier_{cid}")])
+    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="back")])
+    
+    await update.callback_query.edit_message_text("💳 *Список кассиров*\n\nНажмите на кассира для удаления:", 
+                                                   reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+
+async def delete_cashier(update, context, cashier_id):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("SELECT telegram_id, username FROM users WHERE id = ?", (cashier_id,))
+    cashier = cur.fetchone()
+    cur.execute("DELETE FROM users WHERE id = ?", (cashier_id,))
+    conn.commit()
+    conn.close()
+    
+    name = f"@{cashier[1]}" if cashier[1] else str(cashier[0])
+    await update.callback_query.edit_message_text(f"✅ Кассир {name} удален")
+    
+    try:
+        await context.bot.send_message(cashier[0], "❌ Ваша роль кассира удалена.")
     except:
         pass
 
 # ========== АДМИН: МЕРОПРИЯТИЯ ==========
 async def admin_events(update, context):
     events = get_active_events()
+    text = "📅 *МЕРОПРИЯТИЯ*\n\n"
+    for eid, name in events:
+        text += f"• {name}\n"
+    if not events:
+        text += "Нет мероприятий"
     
     keyboard = [
-        [InlineKeyboardButton("➕ Добавить мероприятие", callback_data="admin_add_event")],
-        [InlineKeyboardButton("❌ Удалить мероприятие", callback_data="admin_delete_event")]
+        [InlineKeyboardButton("➕ Добавить", callback_data="add_event")],
+        [InlineKeyboardButton("❌ Удалить", callback_data="del_event")],
+        [InlineKeyboardButton("🔙 Назад", callback_data="back")]
     ]
-    
-    text = "📅 *МЕРОПРИЯТИЯ*\n\n"
-    if events:
-        for event in events:
-            text += f"• {event[1]} ({event[2]})\n"
-    else:
-        text += "Нет активных мероприятий\n"
-    
-    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="admin_menu")])
-    
-    await update.callback_query.edit_message_text(
-        text,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='Markdown'
-    )
+    await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
 
-async def admin_add_event(update, context):
+async def add_event_start(update, context):
     await update.callback_query.edit_message_text("✍️ Введите название мероприятия:")
-    return ADMIN_ADD_EVENT
+    context.user_data['waiting'] = 'event_name'
 
-async def admin_add_event_process(update, context):
-    name = update.message.text.strip()
-    context.user_data['temp_event_name'] = name
-    await update.message.reply_text("📅 Введите дату мероприятия (в формате ГГГГ-ММ-ДД):")
-    return ADMIN_ADD_EVENT + 1
+async def add_event_name(update, context):
+    context.user_data['event_name'] = update.message.text.strip()
+    await update.message.reply_text("📅 Введите дату (ГГГГ-ММ-ДД):")
+    context.user_data['waiting'] = 'event_date'
 
-async def admin_add_event_date(update, context):
+async def add_event_date(update, context):
+    name = context.user_data.get('event_name')
     date = update.message.text.strip()
-    name = context.user_data.get('temp_event_name')
     
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    cur.execute("INSERT INTO events (name, date, is_active) VALUES (?, ?, 1)", (name, date))
+    cur.execute("INSERT INTO events (name, date) VALUES (?, ?)", (name, date))
     conn.commit()
     conn.close()
     
-    await update.message.reply_text(f"✅ Мероприятие '{name}' добавлено на {date}")
-    await show_admin_menu(update, context)
-    return -1
+    await update.message.reply_text(f"✅ Мероприятие '{name}' добавлено")
+    context.user_data['waiting'] = None
+    await start(update, context)
 
-async def admin_delete_event(update, context):
+async def delete_event_list(update, context):
     events = get_active_events()
-    
     if not events:
-        await update.callback_query.edit_message_text("📭 Нет мероприятий для удаления")
+        await update.callback_query.edit_message_text("📭 Нет мероприятий")
         return
     
     keyboard = []
-    for event in events:
-        keyboard.append([InlineKeyboardButton(f"{event[1]} ({event[2]})", callback_data=f"admin_delete_event_{event[0]}")])
-    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="admin_events")])
+    for eid, name in events:
+        keyboard.append([InlineKeyboardButton(name, callback_data=f"del_event_{eid}")])
+    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="events")])
     
-    await update.callback_query.edit_message_text(
-        "❌ *Выберите мероприятие для удаления:*",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='Markdown'
-    )
+    await update.callback_query.edit_message_text("❌ *Выберите мероприятие для удаления:*", 
+                                                   reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
 
-async def admin_delete_event_confirm(update, context, event_id):
+async def delete_event(update, context, event_id):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("SELECT name FROM events WHERE id = ?", (event_id,))
-    event = cur.fetchone()
+    name = cur.fetchone()[0]
     cur.execute("UPDATE events SET is_active = 0 WHERE id = ?", (event_id,))
     conn.commit()
     conn.close()
     
-    await update.callback_query.edit_message_text(f"✅ Мероприятие '{event[0]}' удалено")
+    await update.callback_query.edit_message_text(f"✅ Мероприятие '{name}' удалено")
 
 # ========== АДМИН: СБРОС МЕСЯЦА ==========
-async def admin_reset_month(update, context):
+async def reset_month(update, context):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    
-    # Получаем промоутеров для уведомления
-    cur.execute("SELECT telegram_id, username FROM users WHERE role = 'promoter'")
+    cur.execute("SELECT telegram_id FROM users WHERE role = 'promoter'")
     promoters = cur.fetchall()
-    
-    # Сбрасываем все подтверждения
-    cur.execute("UPDATE lists SET is_confirmed = 0, confirmed_at = NULL")
+    cur.execute("UPDATE lists SET is_confirmed = 0")
     conn.commit()
     conn.close()
     
-    # Уведомляем промоутеров
-    for tg_id, username in promoters:
+    for p in promoters:
         try:
-            await context.bot.send_message(tg_id, "📅 *НОВЫЙ МЕСЯЦ НАЧАЛСЯ!*\n\nСтатистика обнулена. Удачи! 🚀", parse_mode='Markdown')
+            await context.bot.send_message(p[0], "📅 *НОВЫЙ МЕСЯЦ!*\n\nСтатистика обнулена. Удачи!", parse_mode='Markdown')
         except:
             pass
     
-    await update.callback_query.edit_message_text("✅ Месяц сброшен. Статистика обнулена.")
+    await update.callback_query.edit_message_text("✅ Месяц сброшен")
 
-# ========== ПРОМОУТЕР: МОИ СПИСКИ ==========
+# ========== ПРОМОУТЕР: СПИСКИ ==========
 async def my_lists(update, context):
     user_id = update.callback_query.from_user.id
-    
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("SELECT id FROM users WHERE telegram_id = ?", (user_id,))
     promoter = cur.fetchone()
-    
     if not promoter:
         await update.callback_query.edit_message_text("Ошибка")
         return
     
-    promoter_id = promoter[0]
-    lists = get_promoter_lists(promoter_id)
+    cur.execute('''
+        SELECT l.full_name, e.name, l.is_confirmed 
+        FROM lists l
+        JOIN events e ON l.event_id = e.id
+        WHERE l.promoter_id = ?
+        ORDER BY l.is_confirmed, l.id DESC
+    ''', (promoter[0],))
+    lists = cur.fetchall()
+    conn.close()
     
     if not lists:
-        await update.callback_query.edit_message_text("📭 Ваш список пуст")
+        await update.callback_query.edit_message_text("📭 Список пуст")
         return
     
     text = "📋 *ВАШ СПИСОК*\n\n"
-    for full_name, event_name, is_confirmed, confirmed_at in lists:
-        status = "✅" if is_confirmed else "⏳"
-        text += f"{status} {full_name} [{event_name}]\n"
+    for name, event, status in lists:
+        icon = "✅" if status else "⏳"
+        text += f"{icon} {name} [{event}]\n"
     
-    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="promoter_menu")]]
-    await update.callback_query.edit_message_text(
-        text,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='Markdown'
-    )
+    await update.callback_query.edit_message_text(text, parse_mode='Markdown')
 
 # ========== ПРОМОУТЕР: СТАТИСТИКА ==========
 async def my_stats(update, context):
     user_id = update.callback_query.from_user.id
-    
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("SELECT id, balance FROM users WHERE telegram_id = ?", (user_id,))
     promoter = cur.fetchone()
-    
     if not promoter:
         await update.callback_query.edit_message_text("Ошибка")
         return
     
-    promoter_id, balance = promoter
-    monthly = get_monthly_count(promoter_id)
+    pid, balance = promoter
+    monthly = get_monthly_count(pid)
     rate = get_rate(monthly)
     
-    cur.execute("SELECT COUNT(*) FROM lists WHERE promoter_id = ?", (promoter_id,))
+    cur.execute("SELECT COUNT(*) FROM lists WHERE promoter_id = ?", (pid,))
     total_added = cur.fetchone()[0]
-    cur.execute("SELECT COUNT(*) FROM lists WHERE promoter_id = ? AND is_confirmed = 1", (promoter_id,))
+    cur.execute("SELECT COUNT(*) FROM lists WHERE promoter_id = ? AND is_confirmed = 1", (pid,))
     total_confirmed = cur.fetchone()[0]
-    
-    # Статистика по мероприятиям
-    events = get_active_events()
-    event_stats = ""
-    for event in events:
-        event_id, event_name, _ = event
-        event_count = get_monthly_count(promoter_id, event_id)
-        if event_count > 0:
-            event_stats += f"• {event_name}: {event_count} чел.\n"
-    
     conn.close()
     
     conv = round(total_confirmed / total_added * 100, 1) if total_added > 0 else 0
     
     text = (
-        f"💰 *ВАШ БАЛАНС:* {balance} руб.\n\n"
-        f"📊 *ЗА ЭТОТ МЕСЯЦ:*\n"
-        f"• Пришло: {monthly} чел.\n"
-        f"• Ставка: {rate} руб./чел.\n"
-    )
-    
-    if event_stats:
-        text += f"\n📅 *ПО МЕРОПРИЯТИЯМ:*\n{event_stats}"
-    
-    text += (
-        f"\n📈 *ВСЕГО:*\n"
+        f"💰 *БАЛАНС:* {balance} руб.\n\n"
+        f"📊 *ЗА МЕСЯЦ:* {monthly} чел.\n"
+        f"💰 *СТАВКА:* {rate} руб./чел.\n\n"
+        f"📈 *ВСЕГО:*\n"
         f"• Добавлено: {total_added}\n"
         f"• Пришло: {total_confirmed}\n"
         f"• Конверсия: {conv}%"
     )
     
-    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="promoter_menu")]]
-    await update.callback_query.edit_message_text(
-        text,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='Markdown'
-    )
+    await update.callback_query.edit_message_text(text, parse_mode='Markdown')
 
-# ========== ПРОМОУТЕР: ДОБАВЛЕНИЕ ==========
-async def add_person(update, context):
+# ========== ПРОМОУТЕР: ДОБАВИТЬ ЧЕЛОВЕКА ==========
+async def add_person_start(update, context):
     events = get_active_events()
-    
     if not events:
-        await update.callback_query.edit_message_text("❌ Нет активных мероприятий")
+        await update.callback_query.edit_message_text("❌ Нет мероприятий")
         return
     
     keyboard = []
-    for event in events:
-        keyboard.append([InlineKeyboardButton(event[1], callback_data=f"add_event_{event[0]}")])
+    for eid, name in events:
+        keyboard.append([InlineKeyboardButton(name, callback_data=f"add_{eid}")])
+    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="back")])
     
-    await update.callback_query.edit_message_text(
-        "📅 *Выберите мероприятие:*",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='Markdown'
-    )
+    await update.callback_query.edit_message_text("📅 *Выберите мероприятие:*", 
+                                                   reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
 
 async def add_person_event(update, context, event_id):
-    context.user_data['add_event_id'] = event_id
-    await update.callback_query.edit_message_text("✍️ Введите Фамилию и Имя человека:")
-    return ADD_NAME
+    context.user_data['event_id'] = event_id
+    await update.callback_query.edit_message_text("✍️ Введите Фамилию и Имя:")
+    context.user_data['waiting'] = 'add_person'
 
 async def add_person_process(update, context):
     name = update.message.text.strip()
     user_id = update.effective_user.id
-    event_id = context.user_data.get('add_event_id')
+    event_id = context.user_data.get('event_id')
     
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
@@ -638,50 +414,47 @@ async def add_person_process(update, context):
     
     if not promoter:
         await update.message.reply_text("Ошибка")
-        return -1
+        context.user_data['waiting'] = None
+        return
     
     cur.execute("SELECT id FROM lists WHERE full_name = ? AND promoter_id = ? AND event_id = ?", 
                 (name, promoter[0], event_id))
     if cur.fetchone():
-        await update.message.reply_text(f"⚠️ {name} уже есть в списке на это мероприятие")
+        await update.message.reply_text(f"⚠️ {name} уже есть в списке")
     else:
         cur.execute("INSERT INTO lists (full_name, promoter_id, event_id, is_confirmed) VALUES (?, ?, ?, 0)",
                     (name, promoter[0], event_id))
         conn.commit()
-        await update.message.reply_text(f"✅ {name} добавлен на мероприятие")
+        await update.message.reply_text(f"✅ {name} добавлен")
     
     conn.close()
-    
-    await show_promoter_menu(update, context)
-    return -1
+    context.user_data['waiting'] = None
+    await start(update, context)
 
-# ========== ПРОМОУТЕР: УДАЛЕНИЕ ==========
-async def delete_person(update, context):
+# ========== ПРОМОУТЕР: УДАЛИТЬ ЧЕЛОВЕКА ==========
+async def delete_person_start(update, context):
     events = get_active_events()
-    
     if not events:
-        await update.callback_query.edit_message_text("❌ Нет активных мероприятий")
+        await update.callback_query.edit_message_text("❌ Нет мероприятий")
         return
     
     keyboard = []
-    for event in events:
-        keyboard.append([InlineKeyboardButton(event[1], callback_data=f"delete_event_{event[0]}")])
+    for eid, name in events:
+        keyboard.append([InlineKeyboardButton(name, callback_data=f"del_{eid}")])
+    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="back")])
     
-    await update.callback_query.edit_message_text(
-        "📅 *Выберите мероприятие:*",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='Markdown'
-    )
+    await update.callback_query.edit_message_text("📅 *Выберите мероприятие:*", 
+                                                   reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
 
 async def delete_person_event(update, context, event_id):
-    context.user_data['delete_event_id'] = event_id
-    await update.callback_query.edit_message_text("🗑 Введите Фамилию Имя человека для удаления:")
-    return DELETE_NAME
+    context.user_data['event_id'] = event_id
+    await update.callback_query.edit_message_text("🗑 Введите Фамилию и Имя:")
+    context.user_data['waiting'] = 'delete_person'
 
 async def delete_person_process(update, context):
     name = update.message.text.strip()
     user_id = update.effective_user.id
-    event_id = context.user_data.get('delete_event_id')
+    event_id = context.user_data.get('event_id')
     
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
@@ -690,7 +463,8 @@ async def delete_person_process(update, context):
     
     if not promoter:
         await update.message.reply_text("Ошибка")
-        return -1
+        context.user_data['waiting'] = None
+        return
     
     cur.execute("DELETE FROM lists WHERE full_name = ? AND promoter_id = ? AND event_id = ? AND is_confirmed = 0",
                 (name, promoter[0], event_id))
@@ -699,12 +473,11 @@ async def delete_person_process(update, context):
     if cur.rowcount > 0:
         await update.message.reply_text(f"🗑 {name} удален")
     else:
-        await update.message.reply_text(f"❌ {name} не найден (возможно, уже пришел)")
+        await update.message.reply_text(f"❌ {name} не найден")
     
     conn.close()
-    
-    await show_promoter_menu(update, context)
-    return -1
+    context.user_data['waiting'] = None
+    await start(update, context)
 
 # ========== КАССИР ==========
 async def check_person(update, context):
@@ -728,7 +501,7 @@ async def check_person(update, context):
     
     list_id, full_name, promoter_id, promoter_tg, event_name = result
     
-    context.user_data['pending_confirm'] = {
+    context.user_data['pending'] = {
         'list_id': list_id,
         'name': full_name,
         'promoter_id': promoter_id,
@@ -740,10 +513,7 @@ async def check_person(update, context):
         InlineKeyboardButton("✅ ПОДТВЕРДИТЬ", callback_data="confirm_yes"),
         InlineKeyboardButton("❌ ОТМЕНА", callback_data="confirm_no")
     ]]
-    await update.message.reply_text(
-        f"🔔 НАЙДЕН: {full_name}\n📅 Мероприятие: {event_name}",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    await update.message.reply_text(f"🔔 {full_name}\n📅 {event_name}", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def confirm_handler(update, context):
     query = update.callback_query
@@ -751,141 +521,129 @@ async def confirm_handler(update, context):
     
     if query.data == "confirm_no":
         await query.edit_message_text("❌ ОТМЕНЕНО")
-        if 'pending_confirm' in context.user_data:
-            del context.user_data['pending_confirm']
+        if 'pending' in context.user_data:
+            del context.user_data['pending']
         return
     
     if query.data == "confirm_yes":
-        pending = context.user_data.get('pending_confirm')
+        pending = context.user_data.get('pending')
         if not pending:
             await query.edit_message_text("❌ ОШИБКА")
             return
         
-        list_id = pending['list_id']
-        name = pending['name']
-        promoter_id = pending['promoter_id']
-        promoter_tg = pending['promoter_tg']
-        event_name = pending['event_name']
-        
         conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
         
-        cur.execute("SELECT is_confirmed FROM lists WHERE id = ?", (list_id,))
+        cur.execute("SELECT is_confirmed FROM lists WHERE id = ?", (pending['list_id'],))
         if cur.fetchone()[0] == 1:
             await query.edit_message_text("⚠️ УЖЕ ОТМЕЧЕН")
             conn.close()
             return
         
-        monthly = get_monthly_count(promoter_id)
+        monthly = get_monthly_count(pending['promoter_id'])
         rate = get_rate(monthly)
         
-        cur.execute("UPDATE lists SET is_confirmed = 1, confirmed_at = ? WHERE id = ?", 
-                    (datetime.now().isoformat(), list_id))
-        cur.execute("UPDATE users SET balance = balance + ? WHERE id = ?", (rate, promoter_id))
+        cur.execute("UPDATE lists SET is_confirmed = 1 WHERE id = ?", (pending['list_id'],))
+        cur.execute("UPDATE users SET balance = balance + ? WHERE id = ?", (rate, pending['promoter_id']))
         
-        cur.execute("SELECT balance FROM users WHERE id = ?", (promoter_id,))
+        cur.execute("SELECT balance FROM users WHERE id = ?", (pending['promoter_id'],))
         new_balance = cur.fetchone()[0]
         
         conn.commit()
         conn.close()
         
-        await query.edit_message_text(f"✅ ПОДТВЕРЖДЕНО!\n\n👤 {name}\n📅 {event_name}\n✅ Отмечен как пришедший")
+        # Кассиру не показываем сумму
+        await query.edit_message_text(f"✅ ПОДТВЕРЖДЕНО!\n\n👤 {pending['name']}\n📅 {pending['event_name']}")
         
-        if promoter_tg:
+        # Промоутеру показываем сумму
+        if pending['promoter_tg']:
             await context.bot.send_message(
-                promoter_tg,
+                pending['promoter_tg'],
                 f"🎉 *ПРИШЕЛ ГОСТЬ!*\n\n"
-                f"👤 {name}\n"
-                f"📅 {event_name}\n"
+                f"👤 {pending['name']}\n"
+                f"📅 {pending['event_name']}\n"
                 f"💰 +{rate} руб.\n"
-                f"💰 Новый баланс: {new_balance} руб.",
+                f"💰 Баланс: {new_balance} руб.",
                 parse_mode='Markdown'
             )
         
-        del context.user_data['pending_confirm']
+        del context.user_data['pending']
 
 # ========== ОБРАБОТЧИК КНОПОК ==========
 async def handle_callback(update, context):
     query = update.callback_query
     data = query.data
     
-    if data == "back_to_start":
+    if data == "back":
         await start(update, context)
         return
     
-    if data == "admin_menu":
-        await show_admin_menu(update, context)
-        return
-    
-    if data == "promoter_menu":
-        await show_promoter_menu(update, context)
-        return
-    
-    # Админские кнопки
-    if data == "admin_stats":
+    if data == "stats":
         await admin_stats(update, context)
-    elif data == "admin_promoters":
+    elif data == "promoters":
         await admin_promoters(update, context)
-    elif data == "admin_view_lists":
-        await admin_view_lists(update, context)
-    elif data == "admin_reset_balance":
-        await admin_reset_balance(update, context)
-    elif data == "admin_add_promoter":
-        await admin_add_promoter(update, context)
-        return ADMIN_ADD_PROMOTER
-    elif data == "admin_delete_promoter":
-        await admin_delete_promoter(update, context)
-    elif data == "admin_events":
+    elif data == "cashiers":
+        await admin_cashiers(update, context)
+    elif data == "events":
         await admin_events(update, context)
-    elif data == "admin_add_event":
-        await admin_add_event(update, context)
-        return ADMIN_ADD_EVENT
-    elif data == "admin_delete_event":
-        await admin_delete_event(update, context)
-    elif data == "admin_reset_month":
-        await admin_reset_month(update, context)
-    
-    # Промоутерские кнопки
+    elif data == "reset_month":
+        await reset_month(update, context)
+    elif data == "add_event":
+        await add_event_start(update, context)
+    elif data == "del_event":
+        await delete_event_list(update, context)
     elif data == "my_lists":
         await my_lists(update, context)
     elif data == "add_person":
-        await add_person(update, context)
+        await add_person_start(update, context)
     elif data == "delete_person":
-        await delete_person(update, context)
+        await delete_person_start(update, context)
     elif data == "my_stats":
         await my_stats(update, context)
     
-    # Обработка выбора промоутера для просмотра списков
-    elif data.startswith("admin_view_promoter_"):
-        promoter_id = int(data.split("_")[3])
-        await admin_view_promoter_lists(update, context, promoter_id)
+    elif data.startswith("view_promoter_"):
+        pid = int(data.split("_")[2])
+        await view_promoter(update, context, pid)
+    elif data.startswith("del_promoter_"):
+        pid = int(data.split("_")[2])
+        await delete_promoter(update, context, pid)
+    elif data.startswith("del_cashier_"):
+        cid = int(data.split("_")[2])
+        await delete_cashier(update, context, cid)
+    elif data.startswith("del_event_"):
+        eid = int(data.split("_")[2])
+        await delete_event(update, context, eid)
+    elif data.startswith("add_"):
+        eid = int(data.split("_")[1])
+        await add_person_event(update, context, eid)
+    elif data.startswith("del_"):
+        eid = int(data.split("_")[1])
+        await delete_person_event(update, context, eid)
+
+# ========== ОБРАБОТЧИК СООБЩЕНИЙ ==========
+async def handle_message(update, context):
+    waiting = context.user_data.get('waiting')
     
-    # Обработка сброса баланса
-    elif data.startswith("admin_reset_balance_"):
-        promoter_id = int(data.split("_")[3])
-        await admin_reset_balance_confirm(update, context, promoter_id)
-    
-    # Обработка удаления промоутера
-    elif data.startswith("admin_delete_promoter_"):
-        promoter_id = int(data.split("_")[3])
-        await admin_delete_promoter_confirm(update, context, promoter_id)
-    
-    # Обработка удаления мероприятия
-    elif data.startswith("admin_delete_event_"):
-        event_id = int(data.split("_")[3])
-        await admin_delete_event_confirm(update, context, event_id)
-    
-    # Обработка выбора мероприятия для добавления/удаления человека
-    elif data.startswith("add_event_"):
-        event_id = int(data.split("_")[2])
-        await add_person_event(update, context, event_id)
-        return ADD_NAME
-    elif data.startswith("delete_event_"):
-        event_id = int(data.split("_")[2])
-        await delete_person_event(update, context, event_id)
-        return DELETE_NAME
-    
-    return -1
+    if waiting == 'event_name':
+        await add_event_name(update, context)
+    elif waiting == 'event_date':
+        await add_event_date(update, context)
+    elif waiting == 'add_person':
+        await add_person_process(update, context)
+    elif waiting == 'delete_person':
+        await delete_person_process(update, context)
+    else:
+        user_id = update.effective_user.id
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute("SELECT role FROM users WHERE telegram_id = ?", (user_id,))
+        user = cur.fetchone()
+        conn.close()
+        
+        if user and user[0] == 'cashier':
+            await check_person(update, context)
+        else:
+            await update.message.reply_text("❌ Неизвестная команда. Напишите /start")
 
 # ========== ЗАПУСК ==========
 def main():
@@ -893,37 +651,51 @@ def main():
     
     app = Application.builder().token(TOKEN).build()
     
-    # Команды
     app.add_handler(CommandHandler("start", start))
-    
-    # Обработчики
-    app.add_handler(CallbackQueryHandler(handle_callback, pattern="^(?!confirm_).*"))
+    app.add_handler(CommandHandler("setrole", set_role))
     app.add_handler(CallbackQueryHandler(confirm_handler, pattern="^(confirm_yes|confirm_no)$"))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, check_person))
-    
-    # ConversationHandler для админа и промоутера
-    from telegram.ext import ConversationHandler
-    
-    conv_handler = ConversationHandler(
-        entry_points=[
-            CallbackQueryHandler(admin_add_promoter, pattern="^admin_add_promoter$"),
-            CallbackQueryHandler(admin_add_event, pattern="^admin_add_event$"),
-            CallbackQueryHandler(add_person, pattern="^add_person$"),
-            CallbackQueryHandler(delete_person, pattern="^delete_person$"),
-        ],
-        states={
-            ADMIN_ADD_PROMOTER: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_add_promoter_process)],
-            ADMIN_ADD_EVENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_add_event_process)],
-            ADMIN_ADD_EVENT + 1: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_add_event_date)],
-            ADD_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_person_process)],
-            DELETE_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, delete_person_process)],
-        },
-        fallbacks=[CommandHandler("start", start)],
-    )
-    app.add_handler(conv_handler)
+    app.add_handler(CallbackQueryHandler(handle_callback))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     print("✅ БОТ ЗАПУЩЕН!")
     app.run_polling()
+
+async def set_role(update, context):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("⛔ Только администратор")
+        return
+    
+    try:
+        args = context.args
+        if len(args) != 2:
+            await update.message.reply_text("Использование: /setrole ID promoter|cashier")
+            return
+        
+        tg_id = int(args[0])
+        role = args[1]
+        
+        if role not in ['promoter', 'cashier']:
+            await update.message.reply_text("Роль: promoter или cashier")
+            return
+        
+        try:
+            chat = await context.bot.get_chat(tg_id)
+            username = chat.username
+        except:
+            username = None
+        
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute("INSERT OR REPLACE INTO users (telegram_id, username, role, balance) VALUES (?, ?, ?, 0)",
+                    (tg_id, username, role))
+        conn.commit()
+        conn.close()
+        
+        await update.message.reply_text(f"✅ Роль {role} назначена пользователю {tg_id}")
+        await context.bot.send_message(tg_id, f"✅ Вам назначена роль *{role}*!\nНапишите /start", parse_mode='Markdown')
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка: {e}")
 
 if __name__ == '__main__':
     main()
