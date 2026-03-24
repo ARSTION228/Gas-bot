@@ -8,7 +8,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQu
 
 # ========== НАСТРОЙКИ ==========
 TOKEN = "8680724321:AAGmcU8I5Z1T9d8kHrqCS5qiZpmLpvPnLY0"  # ← ЗАМЕНИ НА СВОЙ ТОКЕН!
-ADMIN_USERNAME = "ARSTION"
+ADMIN_ID = 355936751  # ← ТВОЙ TELEGRAM ID
 
 # Состояния для меню
 ADD_NAME, DELETE_NAME = range(2)
@@ -103,41 +103,13 @@ def get_promoter_monthly_stats(promoter_id):
         return result[0], result[1]
     return 0, 0
 
-# ========== ДЕКОРАТОРЫ ==========
-def role_required(required_role):
-    def decorator(func):
-        @wraps(func)
-        async def wrapper(update, context, *args, **kwargs):
-            user_id = update.effective_user.id
-            conn = sqlite3.connect(DB_PATH)
-            cur = conn.cursor()
-            cur.execute("SELECT role FROM users WHERE telegram_id = ?", (user_id,))
-            result = cur.fetchone()
-            conn.close()
-            if not result:
-                await update.message.reply_text("❌ Вы не зарегистрированы.")
-                return
-            if result[0] != required_role:
-                await update.message.reply_text("⛔ У вас нет доступа.")
-                return
-            return await func(update, context, *args, **kwargs)
-        return wrapper
-    return decorator
-
-async def get_admin_id(context):
-    try:
-        admin = await context.bot.get_chat(f"@{ADMIN_USERNAME}")
-        return admin.id
-    except:
-        return None
-
+# ========== ДЕКОРАТОР АДМИНА ==========
 def admin_required(func):
     @wraps(func)
-    async def wrapper(update, context, *args, **kwargs):
+    async def wrapper(update, update2, *args, **kwargs):
         user_id = update.effective_user.id
-        admin_id = await get_admin_id(context)
-        if admin_id and user_id == admin_id:
-            return await func(update, context, *args, **kwargs)
+        if user_id == ADMIN_ID:
+            return await func(update, update2, *args, **kwargs)
         else:
             await update.message.reply_text("⛔ Только администратор.")
             return
@@ -155,18 +127,18 @@ async def start(update, context):
     
     if not user:
         await update.message.reply_text(
-            "👋 Добро пожаловать!\nВаш аккаунт не активирован. Обратитесь к администратору.\n"
-            f"Ваш ID: {user_id}"
+            f"👋 Добро пожаловать!\nВаш аккаунт не активирован. Обратитесь к администратору.\nВаш ID: {user_id}"
         )
-        admin_id = await get_admin_id(context)
-        if admin_id:
-            await context.bot.send_message(admin_id, f"🔔 Новый пользователь: @{username} (ID: {user_id})")
+        if user_id != ADMIN_ID:
+            await context.bot.send_message(ADMIN_ID, f"🔔 Новый пользователь: @{username} (ID: {user_id})")
     else:
         role = user[0]
         if role == 'promoter':
             await show_promoter_menu(update, context)
-        else:
+        elif role == 'cashier':
             await show_cashier_menu(update, context)
+        elif role == 'admin':
+            await update.message.reply_text("👑 Вы администратор. Используйте команды:\n/stats - статистика\n/resetmonth - сброс месяца\n/setrole - назначить роль")
 
 async def show_promoter_menu(update, context):
     keyboard = [
@@ -286,7 +258,6 @@ async def delete_person_get_name(update, context):
     await update.message.reply_text(f"🗑 {full_name} удален" if cur.rowcount > 0 else f"❌ {full_name} не найден")
     return ConversationHandler.END
 
-@role_required('cashier')
 async def check_person(update, context):
     full_name = update.message.text.strip()
     conn = sqlite3.connect(DB_PATH)
@@ -350,11 +321,11 @@ async def set_role(update, context):
     try:
         args = context.args
         if len(args) != 2:
-            await update.message.reply_text("Использование: /setrole <telegram_id> <promoter|cashier>")
+            await update.message.reply_text("Использование: /setrole <telegram_id> <promoter|cashier|admin>")
             return
         tg_id, role = int(args[0]), args[1]
-        if role not in ['promoter', 'cashier']:
-            await update.message.reply_text("Роль: promoter или cashier")
+        if role not in ['promoter', 'cashier', 'admin']:
+            await update.message.reply_text("Роль: promoter, cashier или admin")
             return
         conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
@@ -413,6 +384,15 @@ async def reset_month(update, context):
 # ========== ЗАПУСК ==========
 def main():
     init_db()
+    
+    # Добавляем админа в базу данных при запуске
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute('''INSERT OR IGNORE INTO users (telegram_id, role, registered_at) VALUES (?, ?, ?)''',
+                (ADMIN_ID, 'admin', datetime.now().isoformat()))
+    conn.commit()
+    conn.close()
+    
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("setrole", set_role))
@@ -428,7 +408,7 @@ def main():
     app.add_handler(conv)
     app.add_handler(CallbackQueryHandler(promoter_menu_callback, pattern='^(my_lists|my_stats)$'))
     app.add_handler(CallbackQueryHandler(confirm_callback, pattern='^(confirm_|cancel)'))
-    print("Бот запущен!")
+    print("🤖 Бот запущен!")
     app.run_polling()
 
 if __name__ == '__main__':
